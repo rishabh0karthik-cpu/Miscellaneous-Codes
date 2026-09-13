@@ -1,0 +1,19 @@
+{
+  "fixture_status": "synthetic",
+  "purpose": "Functional model-testing document, not scientific evidence",
+  "public_schema_reference": {
+    "provider": "NOAA NMFS SWFSC ERD",
+    "service": "NOAA CoastWatch ERDDAP",
+    "dataset_id": "erdTAgeomday",
+    "dataset_title": "Currents, Geostrophic, Aviso, 0.25 degrees, Global, 1992-2009 (Monthly Composite)",
+    "variables": ["u_current", "v_current"],
+    "units": "m s-1",
+    "dataset_search_url": "https://coastwatch.pfeg.noaa.gov/erddap/search/index.csv?searchFor=current"
+  },
+  "import_attempt": {
+    "status": "metadata lookup succeeded; full scientific grid was not imported",
+    "reason": "The test fixture must remain small, deterministic, and independent of remote-data availability"
+  },
+  "dummy_document": "dummy_current_patterns_2006_2025.csv",
+  "warning": "The dummy rows are simulated and must not be interpreted as measured ocean currents."
+}

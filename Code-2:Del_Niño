@@ -1,0 +1,142 @@
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+
+class OceanCurrentPredictor:
+    def __init__(self):
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+
+    def fit(self, feature_data, current_patterns):
+        self.model.fit(feature_data, current_patterns)
+
+    def predict(self, feature_data):
+        return self.model.predict(feature_data)
+
+
+class LinearCurrentDynamics:
+    """Learn a linear transition matrix for consecutive current patterns."""
+
+    def __init__(self):
+        self.transition_matrix = None
+        self.residual_covariance = None
+
+    def fit(self, current_patterns):
+        current_patterns = np.asarray(current_patterns, dtype=float)
+        if current_patterns.ndim != 2 or current_patterns.shape[0] < 2:
+            raise ValueError("current_patterns must contain at least two observations")
+
+        previous_patterns = current_patterns[:-1]
+        next_patterns = current_patterns[1:]
+        self.transition_matrix, _, _, _ = np.linalg.lstsq(
+            previous_patterns, next_patterns, rcond=None
+        )
+
+        residuals = next_patterns - previous_patterns @ self.transition_matrix
+        self.residual_covariance = np.atleast_2d(np.cov(residuals, rowvar=False))
+        return self
+
+    def predict_next(self, current_pattern):
+        if self.transition_matrix is None:
+            raise RuntimeError("fit must be called before predict_next")
+        current_pattern = np.asarray(current_pattern, dtype=float)
+        return current_pattern @ self.transition_matrix
+
+    def predict_sequence(self, initial_pattern, steps):
+        if steps < 1:
+            raise ValueError("steps must be positive")
+        predictions = []
+        current_pattern = np.asarray(initial_pattern, dtype=float)
+        for _ in range(steps):
+            current_pattern = self.predict_next(current_pattern)
+            predictions.append(current_pattern)
+        return np.asarray(predictions)
+
+
+def plot_current_paths(initial_positions, velocity_forecast, save_path=None):
+    """Plot predicted ocean-current paths from longitude/latitude seed points.
+
+    ``initial_positions`` has shape ``(locations, 2)`` and stores longitude,
+    latitude pairs. ``velocity_forecast`` has shape ``(steps, locations, 2)``
+    and stores eastward, northward movement for each forecast step.
+    """
+    import matplotlib.pyplot as plt
+
+    initial_positions = np.asarray(initial_positions, dtype=float)
+    velocity_forecast = np.asarray(velocity_forecast, dtype=float)
+    if initial_positions.ndim != 2 or initial_positions.shape[1] != 2:
+        raise ValueError("initial_positions must have shape (locations, 2)")
+    if velocity_forecast.ndim != 3 or velocity_forecast.shape[2] != 2:
+        raise ValueError("velocity_forecast must have shape (steps, locations, 2)")
+    if velocity_forecast.shape[1] != initial_positions.shape[0]:
+        raise ValueError("forecast locations must match initial_positions")
+
+    paths = np.empty((velocity_forecast.shape[1], velocity_forecast.shape[0] + 1, 2))
+    paths[:, 0] = initial_positions
+    paths[:, 1:] = initial_positions[:, None, :] + np.cumsum(
+        velocity_forecast.transpose(1, 0, 2), axis=1
+    )
+    paths[:, :, 0] = ((paths[:, :, 0] + 180) % 360) - 180
+    paths[:, :, 1] = np.clip(paths[:, :, 1], -90, 90)
+
+    figure, axes = plt.subplots(figsize=(13, 7))
+    try:
+        import cartopy.crs as ccrs
+
+        plt.close(figure)
+        figure = plt.figure(figsize=(13, 7))
+        axes = figure.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        axes.set_global()
+        axes.coastlines()
+        axes.gridlines(draw_labels=True, linewidth=0.4, alpha=0.5)
+        transform = ccrs.PlateCarree()
+    except ImportError:
+        axes.set_xlim(-180, 180)
+        axes.set_ylim(-90, 90)
+        axes.set_xlabel("Longitude")
+        axes.set_ylabel("Latitude")
+        axes.set_facecolor("#eaf4f7")
+        axes.grid(True, linewidth=0.4, alpha=0.5)
+        transform = None
+
+    for location_index, path in enumerate(paths):
+        plot_kwargs = {"label": f"Current {location_index + 1}"}
+        if transform is not None:
+            plot_kwargs["transform"] = transform
+        axes.plot(path[:, 0], path[:, 1], marker="o", markersize=3, **plot_kwargs)
+
+    axes.set_title("Predicted Ocean-Current Paths")
+    axes.legend(loc="upper right", fontsize="small", ncol=2)
+    figure.tight_layout()
+    if save_path is not None:
+        figure.savefig(save_path, dpi=150, bbox_inches="tight")
+    return figure, axes
+
+
+def main() -> None:
+    np.random.seed(42)
+    X_train = np.random.rand(100, 30)
+    y_train = np.random.rand(100, 10)
+
+    predictor = OceanCurrentPredictor()
+    predictor.fit(X_train, y_train)
+
+    X_test = np.random.rand(1, 30)
+    predicted_current = predictor.predict(X_test)[0]
+
+    dynamics = LinearCurrentDynamics()
+    dynamics.fit(y_train)
+    forecast = dynamics.predict_sequence(predicted_current, steps=3)
+    initial_positions = np.array([
+        [-150, 0], [-90, 15], [-30, -10], [60, 5], [150, -15]
+    ])
+    velocity_forecast = forecast.reshape(forecast.shape[0], 5, 2)
+    plot_current_paths(initial_positions, velocity_forecast, "current_forecast.png")
+
+    print("Predicted Current Pattern:", predicted_current)
+    print("Forecast Current Patterns:", forecast)
+    print("Forecast Residual Covariance:", dynamics.residual_covariance)
+    print("Saved current path plot: current_forecast.png")
+
+
+if __name__ == "__main__":
+    main()

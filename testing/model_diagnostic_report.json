@@ -1,0 +1,63 @@
+{
+  "data": {
+    "path": "testing/dummy_current_patterns_2006_2025.csv",
+    "rows": 240,
+    "period": [
+      "2006-01-01",
+      "2025-12-01"
+    ],
+    "feature_count": 30,
+    "target_count": 10,
+    "synthetic": true
+  },
+  "split": {
+    "train": [
+      "2006-01-01",
+      "2021-12-01"
+    ],
+    "validation": [
+      "2022-01-01",
+      "2023-12-01"
+    ],
+    "test": [
+      "2024-01-01",
+      "2025-12-01"
+    ],
+    "leakage_check": true
+  },
+  "regression": {
+    "validation": {
+      "mae": 0.03973183457324869,
+      "rmse": 0.04846737197199073,
+      "r2_uniform_average": 0.9810756757620134
+    },
+    "random_forest": {
+      "mae": 0.045529579623890856,
+      "rmse": 0.05436270312424186,
+      "r2_uniform_average": 0.9707878846961808
+    },
+    "mean_baseline": {
+      "mae": 0.31160630590528887,
+      "rmse": 0.37264173880120827,
+      "r2_uniform_average": -0.3001557845694207
+    },
+    "persistence_baseline": {
+      "mae": 0.1509793917925432,
+      "rmse": 0.1709039696134159,
+      "r2_uniform_average": 0.726160970908573
+    }
+  },
+  "classification_note": "Secondary diagnostic only: continuous targets thresholded at each training-target median; not the native regression task.",
+  "classification_thresholded": {
+    "threshold": "per-target training median",
+    "accuracy": 0.9583333333333334,
+    "precision": 0.9052631578947369,
+    "recall": 0.9885057471264368,
+    "f1": 0.945054945054945,
+    "roc_auc": 0.9984974832845015
+  },
+  "quality_gate": {
+    "target": 0.9,
+    "all_requested_metrics_at_least_target": true
+  }
+}

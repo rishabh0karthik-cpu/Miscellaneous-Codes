@@ -1,0 +1,14 @@
+{
+  "synthetic": true,
+  "purpose": "Potential and robustness testing only; not measured observations",
+  "source": "NOAA CoastWatch ERDDAP erdTAgeomday",
+  "source_training_period": [
+    "1992-10",
+    "2005-12"
+  ],
+  "source_locations": "The five locations configured in evaluate_noaa_real_data.py",
+  "generator": "multivariate Ridge autoregression with 1/2/3/6/12-month lags, kinematic/spatial summaries, seasonal phase, and sampled residual covariance",
+  "rows": 2000,
+  "random_seed": 20260911,
+  "warning": "Synthetic rows inherit assumptions from the training period and cannot establish real-world accuracy."
+}

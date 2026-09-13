@@ -1,0 +1,97 @@
+{
+  "source": {
+    "provider": "NOAA NMFS SWFSC ERD",
+    "dataset_id": "erdTAgeomday",
+    "url": "https://coastwatch.pfeg.noaa.gov/erddap/info/erdTAgeomday/index.csv",
+    "observations_after_missing_value_filter": 201,
+    "locations": [
+      [
+        300,
+        720
+      ],
+      [
+        300,
+        900
+      ],
+      [
+        300,
+        1080
+      ],
+      [
+        320,
+        720
+      ],
+      [
+        280,
+        900
+      ]
+    ],
+    "target_units": "m s-1"
+  },
+  "task": {
+    "type": "one-step multi-output regression",
+    "features": "1, 2, 3, 6, and 12-month current lags plus speed, spatial summaries, recent change, and seasonal phase (89 values)",
+    "targets": "next monthly u/v velocity at five locations (10 values)"
+  },
+  "split": {
+    "train": [
+      "1993-10",
+      "2005-12"
+    ],
+    "validation": [
+      "2006-01",
+      "2007-12"
+    ],
+    "test": [
+      "2008-01",
+      "2009-06"
+    ],
+    "chronological": true
+  },
+  "regression": {
+    "random_forest": {
+      "mae_m_per_s": 0.0358515385747,
+      "rmse_m_per_s": 0.06843331538832731,
+      "r2_uniform_average": -0.11253691320831034
+    },
+    "quadratic_ridge": {
+      "selected_alpha": 10000.0,
+      "validation": {
+        "mae_m_per_s": 0.03604258752799542,
+        "rmse_m_per_s": 0.06870088976422238,
+        "r2_uniform_average": -0.2827577460749517
+      },
+      "test": {
+        "mae_m_per_s": 0.03900360485050243,
+        "rmse_m_per_s": 0.07661841615871572,
+        "r2_uniform_average": -0.5069872842215146
+      }
+    },
+    "persistence_baseline": {
+      "mae_m_per_s": 0.04638381815555556,
+      "rmse_m_per_s": 0.08981046827892765,
+      "r2_uniform_average": -0.8889910405790594
+    },
+    "mean_baseline": {
+      "mae_m_per_s": 0.037335332497656845,
+      "rmse_m_per_s": 0.06915743449990493,
+      "r2_uniform_average": -0.11120537033511317
+    }
+  },
+  "classification_note": "Secondary threshold diagnostic only; continuous current prediction is the native task.",
+  "classification_thresholded": {
+    "threshold": "per-target training median",
+    "accuracy": 0.5444444444444444,
+    "precision": 0.5757575757575758,
+    "recall": 0.41304347826086957,
+    "f1": 0.4810126582278481,
+    "roc_auc": 0.47047924901185767
+  },
+  "classification_thresholded_quadratic_ridge": {
+    "accuracy": 0.5777777777777777,
+    "precision": 0.5975609756097561,
+    "recall": 0.532608695652174,
+    "f1": 0.5632183908045977,
+    "roc_auc": 0.4788784584980237
+  }
+}

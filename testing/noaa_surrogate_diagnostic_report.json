@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "warning": "This measures potential on NOAA-fitted surrogate behavior, not real-world accuracy.",
+  "split": {
+    "train_rows": 1600,
+    "test_rows": 400,
+    "chronological": true
+  },
+  "feature_count": 89,
+  "regression": {
+    "mae": 0.035053915104252584,
+    "rmse": 0.06779729720787736,
+    "r2_uniform_average": 0.09720889330232182
+  },
+  "classification_thresholded": {
+    "accuracy": 0.6125,
+    "precision": 0.5988083416087389,
+    "recall": 0.6190965092402464,
+    "f1": 0.6087834427057042,
+    "roc_auc": 0.5264163574576413
+  }
+}
