@@ -1,11 +1,3 @@
-Searched for files matching `**/*`, 4 matches
-
-Read 
-
-Here is a comprehensive, production-ready `README.md` for **Code 3: Accessibility-Friendly Landmark Buddy**. Since I am in **Ask** mode, you can copy the code block below and save it as a new file (e.g., `README_Code3.md` or as part of your project documentation).
-
-***
-
 # Accessibility-Friendly Landmark Buddy
 
 An end-to-end, command-line based Landmark Recognition & Spatial Information System. This application automates the process of gathering architectural imagery, training a custom machine learning model on-the-fly, predicting landmarks from text queries or physical images, geolocating them on an interactive map, and compiling professional, multi-sheet analytical reports.
@@ -114,5 +106,3 @@ Once predictions are calculated, you enter the interactive feedback loop. The fo
 | `retrain` | `retrain` | Triggers partial-fit retraining using only corrected samples. |
 | `send` | `send` | Emails the final generated Excel report and map links to your registered address. |
 | `quit` | `quit` | Exits the program and prints the final performance metrics. |
-
-***
