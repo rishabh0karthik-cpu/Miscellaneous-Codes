@@ -1,0 +1,1004 @@
+#!/usr/bin/env python3
+"""
+Landmark Recognition System - Consolidated Application
+HOG-based image classification with web scraping, geospatial mapping, and Excel reporting.
+"""
+
+import os
+import sys
+import re
+import time
+import json
+import hashlib
+import logging
+import shutil
+import urllib.parse
+from typing import List, Dict, Tuple, Optional, Any
+import numpy as np
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(name)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('landmark_system.log', mode='a', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+class DataManager:
+    """Manages web scraping for landmark images and local dataset storage."""
+    
+    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.webp', '.png'}
+    
+    def __init__(self, base_dir: str = "datasets"):
+        self.base_dir = base_dir
+        if not os.path.exists(self.base_dir):
+            os.makedirs(self.base_dir)
+        self.session = None
+        self._init_session()
+    
+    def _init_session(self):
+        try:
+            import requests
+            self.session = requests.Session()
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+            })
+        except ImportError:
+            self.session = None
+    
+    def search_images(self, query: str, max_results: int = 10) -> List[str]:
+        """Search Bing Images for landmarks using BeautifulSoup."""
+        logger.info(f"Searching for landmark: {query}")
+        image_urls = []
+        
+        if not self.session:
+            return self._get_fallback_images(query, max_results)
+        
+        try:
+            from bs4 import BeautifulSoup
+            url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}"
+            response = self.session.get(url, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            for a in soup.find_all('a', class_='iusc'):
+                m_data = a.get('m')
+                if m_data:
+                    try:
+                        m_dict = json.loads(m_data)
+                        img_url = m_dict.get('murl')
+                        if img_url and img_url.startswith('http'):
+                            image_urls.append(img_url)
+                            if len(image_urls) >= max_results:
+                                break
+                    except json.JSONDecodeError:
+                        continue
+            
+            return image_urls
+            
+        except Exception as e:
+            logger.error(f"Error during search for {query}: {e}")
+            return self._get_fallback_images(query, max_results)
+    
+    def _get_fallback_images(self, query: str, max_results: int) -> List[str]:
+        """Fallback placeholder images for when scraping fails."""
+        fallback = "https://images.pexels.com/photos/460672/pexels-photo-460672.jpeg"
+        if "Eiffel" in query:
+            fallback = "https://images.pexels.com/photos/338515/pexels-photo-338515.jpeg"
+        elif "Statue" in query and "Liberty" in query:
+            fallback = "https://images.pexels.com/photos/356844/pexels-photo-356844.jpeg"
+        return [fallback] * min(max_results, 3)
+    
+    def download_image(self, url: str, landmark_name: str) -> Optional[str]:
+        """Download image with format validation (JPEG, WebP, PNG only)."""
+        landmark_dir = os.path.join(self.base_dir, landmark_name.replace(" ", "_"))
+        if not os.path.exists(landmark_dir):
+            os.makedirs(landmark_dir)
+        
+        try:
+            url_hash = hashlib.md5(url.encode()).hexdigest()
+            if not self.session:
+                return None
+            
+            response = self.session.get(url, stream=True, timeout=15)
+            response.raise_for_status()
+            
+            temp_path = os.path.join(landmark_dir, f"temp_{url_hash}")
+            with open(temp_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            try:
+                from PIL import Image
+                with Image.open(temp_path) as img:
+                    ext = f".{img.format.lower()}"
+                    if ext == '.jpeg':
+                        ext = '.jpg'
+                    if ext not in self.ALLOWED_EXTENSIONS:
+                        img.close()
+                        os.remove(temp_path)
+                        return None
+                
+                final_path = os.path.join(landmark_dir, f"{url_hash}{ext}")
+                if os.path.exists(final_path):
+                    os.remove(temp_path)
+                    return final_path
+                
+                os.rename(temp_path, final_path)
+                logger.info(f"Downloaded: {final_path}")
+                return final_path
+                
+            except Exception as e:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return None
+        
+        except Exception as e:
+            logger.error(f"Failed to download {url}: {e}")
+            return None
+    
+    def process_landmark(self, landmark_name: str, max_images: int = 5) -> List[str]:
+        """Search and download images with query expansion for architectural elements."""
+        queries = [
+            landmark_name,
+            f"{landmark_name} architecture interior",
+            f"{landmark_name} architecture exterior"
+        ]
+        
+        downloaded_paths = []
+        for query in queries:
+            if len(downloaded_paths) >= max_images:
+                break
+            
+            remaining_needed = max_images - len(downloaded_paths)
+            urls = self.search_images(query, max_results=remaining_needed)
+            
+            for url in urls:
+                if len(downloaded_paths) >= max_images:
+                    break
+                path = self.download_image(url, landmark_name)
+                if path and path not in downloaded_paths:
+                    downloaded_paths.append(path)
+                time.sleep(1)
+        
+        return downloaded_paths
+
+
+class LandmarkClassifier:
+    """HOG-based landmark classifier using SGDClassifier."""
+    
+    def __init__(self, model_path: str = "landmark_model.joblib", img_size: Tuple[int, int] = (128, 128)):
+        self.model_path = model_path
+        self.img_size = img_size
+        self.clf = None
+        self.scaler = None
+        self.classes_ = []
+        self.is_trained = False
+        self._init_model()
+        if os.path.exists(model_path):
+            self.load_model()
+    
+    def _init_model(self):
+        try:
+            from sklearn.linear_model import SGDClassifier
+            from sklearn.preprocessing import StandardScaler
+            self.clf = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3, random_state=42, n_jobs=-1)
+            self.scaler = StandardScaler()
+            self.classes_ = []
+            self.is_trained = False
+        except ImportError as e:
+            logger.error(f"Required library not installed: {e}")
+            raise
+    
+    def _reset_model(self):
+        self._init_model()
+    
+    def preprocess_image(self, image_path: str) -> Optional[np.ndarray]:
+        """Extract HOG features from image."""
+        try:
+            from PIL import Image
+            from skimage.feature import hog
+            from skimage.color import rgb2gray
+            from skimage.transform import resize
+            
+            with Image.open(image_path) as img:
+                img = img.convert('RGB')
+                img_array = np.array(img)
+                img_resized = resize(img_array, self.img_size, anti_aliasing=True)
+                img_gray = rgb2gray(img_resized)
+                features = hog(img_gray, orientations=9, pixels_per_cell=(8, 8),
+                              cells_per_block=(2, 2), visualize=False, feature_vector=True)
+                return features
+        except Exception as e:
+            logger.error(f"Error preprocessing image {image_path}: {e}")
+            return None
+    
+    def train_reward_penalty(self, image_paths: List[str], labels: List[str],
+                            min_epochs: int = 2, max_epochs: int = 12,
+                            reward_epochs: int = 2, penalty_epochs: int = 1,
+                            penalty_patience: int = 2, val_split: float = 0.2,
+                            min_improvement: float = 1e-4, random_state: int = 42) -> Dict[str, Any]:
+        """Train model with flexible reward-penalty epoch system."""
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score
+        
+        X, y = [], []
+        for path, label in zip(image_paths, labels):
+            features = self.preprocess_image(path)
+            if features is not None:
+                X.append(features)
+                y.append(label)
+        
+        if not X:
+            return {"epochs_done": 0, "best_val_accuracy": None, "last_val_accuracy": None}
+        
+        X = np.array(X)
+        y = np.array(y)
+        
+        target_classes = sorted(set(y))
+        existing_classes = list(getattr(self.clf, "classes_", []) or [])
+        
+        if self.is_trained and existing_classes:
+            unseen = set(target_classes) - set(existing_classes)
+            if unseen:
+                self._reset_model()
+                self.classes_ = target_classes
+            else:
+                self.classes_ = existing_classes
+        else:
+            self.classes_ = target_classes
+        
+        if not self.is_trained and len(self.classes_) < 2:
+            return {"epochs_done": 0, "best_val_accuracy": None, "last_val_accuracy": None}
+        
+        stratify = None
+        if len(np.unique(y)) > 1:
+            unique, counts = np.unique(y, return_counts=True)
+            if counts.min() >= 2 and len(y) >= 4:
+                stratify = y
+        
+        try:
+            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=val_split,
+                                                              random_state=random_state, stratify=stratify)
+        except Exception:
+            X_train, y_train = X, y
+            X_val, y_val = X, y
+        
+        if not self.is_trained:
+            self.scaler.fit(X_train)
+        else:
+            self.scaler.partial_fit(X_train)
+        
+        X_train_scaled = self.scaler.transform(X_train)
+        X_val_scaled = self.scaler.transform(X_val)
+        
+        epochs_done, budget = 0, max(min_epochs, 1)
+        best_acc, last_acc, no_improve = -1.0, None, 0
+        
+        while epochs_done < max_epochs and (epochs_done < min_epochs or budget > 0):
+            epochs_done += 1
+            budget = max(budget - 1, 0)
+            
+            perm = np.random.default_rng(random_state + epochs_done).permutation(len(X_train_scaled))
+            self.clf.partial_fit(X_train_scaled[perm], y_train[perm], classes=self.classes_)
+            self.is_trained = True
+            
+            acc = accuracy_score(y_val, self.clf.predict(X_val_scaled))
+            last_acc = float(acc)
+            
+            if acc > best_acc + min_improvement:
+                best_acc = float(acc)
+                no_improve = 0
+                budget = min(budget + reward_epochs, max_epochs - epochs_done)
+            else:
+                no_improve += 1
+                budget = max(budget - penalty_epochs, 0)
+                if epochs_done >= min_epochs and no_improve >= penalty_patience and budget == 0:
+                    break
+        
+        self.save_model()
+        return {"epochs_done": epochs_done, "best_val_accuracy": float(best_acc) if best_acc >= 0 else None,
+                "last_val_accuracy": last_acc, "classes": self.classes_}
+    
+    def predict(self, image_path: str) -> Dict[str, Any]:
+        """Predict landmark with confidence scores."""
+        if not self.is_trained:
+            return {"prediction": "Unknown", "confidence": 0.0, "all_probs": {}}
+        
+        features = self.preprocess_image(image_path)
+        if features is None:
+            return {"prediction": "Error", "confidence": 0.0, "all_probs": {}}
+        
+        X_scaled = self.scaler.transform([features])
+        prediction = self.clf.predict(X_scaled)[0]
+        probabilities = self.clf.predict_proba(X_scaled)[0]
+        
+        return {"prediction": str(prediction), "confidence": float(np.max(probabilities)),
+                "all_probs": dict(zip(self.classes_, probabilities))}
+    
+    def save_model(self):
+        try:
+            import joblib
+            joblib.dump({'clf': self.clf, 'scaler': self.scaler, 'classes': self.classes_,
+                        'is_trained': self.is_trained}, self.model_path)
+        except Exception as e:
+            logger.error(f"Failed to save model: {e}")
+    
+    def load_model(self):
+        try:
+            import joblib
+            model_data = joblib.load(self.model_path)
+            self.clf = model_data['clf']
+            self.scaler = model_data['scaler']
+            self.classes_ = model_data['classes']
+            self.is_trained = model_data['is_trained']
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            self._init_model()
+    
+    def evaluate(self, X_test_paths: List[str], y_test: List[str]) -> Dict[str, Any]:
+        from sklearn.metrics import accuracy_score, classification_report
+        X_test, valid_y = [], []
+        for path, label in zip(X_test_paths, y_test):
+            features = self.preprocess_image(path)
+            if features is not None:
+                X_test.append(features)
+                valid_y.append(label)
+        if not X_test:
+            return {"accuracy": 0.0, "report": "No valid test data"}
+        X_test_scaled = self.scaler.transform(X_test)
+        y_pred = self.clf.predict(X_test_scaled)
+        return {"accuracy": accuracy_score(valid_y, y_pred), "report": classification_report(valid_y, y_pred)}
+
+
+class GeoMapper:
+    """Handles geocoding and map creation for landmarks."""
+    
+    def __init__(self):
+        self.geolocator = None
+        self._init_geolocator()
+    
+    def _init_geolocator(self):
+        try:
+            from geopy.geocoders import Nominatim
+            self.geolocator = Nominatim(user_agent="landmark_recognition_system_v1.0")
+        except ImportError:
+            self.geolocator = None
+    
+    def get_coordinates(self, landmark_name: str) -> Optional[Tuple[float, float]]:
+        """Geocode landmark name to (latitude, longitude)."""
+        if not self.geolocator:
+            return None
+        try:
+            location = self.geolocator.geocode(landmark_name, timeout=10)
+            return (location.latitude, location.longitude) if location else None
+        except Exception as e:
+            logger.error(f"Error geocoding {landmark_name}: {e}")
+            return None
+    
+    def create_map(self, predictions: List[Dict], output_path: str = "landmark_map.html") -> str:
+        """Create Folium map with confidence-based colored markers."""
+        if not predictions:
+            return output_path
+        
+        valid_predictions = [p for p in predictions if p.get('coords')]
+        if not valid_predictions:
+            return output_path
+        
+        try:
+            import folium
+            m = folium.Map(location=list(valid_predictions[0]['coords']), zoom_start=2)
+            
+            for p in valid_predictions:
+                confidence = p.get('confidence', 0)
+                color = 'green' if confidence > 0.8 else 'orange' if confidence > 0.5 else 'red'
+                
+                popup_text = f"<b>{p.get('name', 'Unknown')}</b><br>Confidence: {confidence:.2f}"
+                folium.Marker(location=[p['coords'][0], p['coords'][1]], popup=popup_text,
+                             tooltip=p.get('name'), icon=folium.Icon(color=color, icon='info-sign')).add_to(m)
+            
+            m.save(output_path)
+            return output_path
+        except Exception as e:
+            logger.error(f"Error creating map: {e}")
+            return output_path
+
+
+class ReportManager:
+    """Generates Excel reports with multiple sheets and compatibility verdicts."""
+    
+    def __init__(self):
+        self.last_error: Optional[str] = None
+    
+    def build_compatibility_verdict(self, predictions: List[Dict], summary: Dict) -> str:
+        """Build compatibility verdict based on accuracy and geocoding success."""
+        total = int(summary.get("total_landmarks") or len(predictions) or 0)
+        accuracy = summary.get("accuracy")
+        avg_conf = summary.get("avg_confidence")
+        geocoded = sum(1 for p in predictions if p.get("coords"))
+        geo_ratio = (geocoded / total) if total else None
+        
+        if isinstance(accuracy, (int, float)):
+            level = "HIGH" if accuracy >= 0.8 else "MODERATE" if accuracy >= 0.6 else "LOW"
+            parts = [f"Compatibility verdict: {level}.",
+                    f"Measured accuracy on testable items: {accuracy:.2%}."]
+            parts.append(f"Avg confidence: {avg_conf:.2%}." if isinstance(avg_conf, (int, float)) else "Avg confidence: N/A.")
+            parts.append(f"Geocoding success: {geocoded}/{total}.")
+            return " ".join(parts)
+        
+        level = "UNKNOWN"
+        if isinstance(avg_conf, (int, float)):
+            level = "HIGH" if avg_conf >= 0.75 else "MODERATE" if avg_conf >= 0.5 else "LOW"
+        
+        geo_part = f" Geocoding success rate: {geo_ratio:.2%} ({geocoded}/{total})." if isinstance(geo_ratio, (int, float)) else f" Geocoding success: {geocoded}/{total}." if total else ""
+        conf_part = f" Avg confidence: {avg_conf:.2%}." if isinstance(avg_conf, (int, float)) else " Avg confidence: N/A."
+        return f"Compatibility verdict: {level}.{conf_part}{geo_part}"
+    
+    def prompt_save_report(self, source_path: str, default_name: str = "landmark_analysis.xlsx") -> Optional[str]:
+        """Prompt user to save report using tkinter file dialog."""
+        self.last_error = None
+        if not source_path or not os.path.exists(source_path):
+            self.last_error = f"Report file not found: {source_path}"
+            return None
+        
+        try:
+            from tkinter import Tk, filedialog
+            root = Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            dest_path = filedialog.asksaveasfilename(title="Save report as", defaultextension=".xlsx",
+                                                    filetypes=[("Excel Workbook", "*.xlsx")], initialfile=default_name)
+            try:
+                root.destroy()
+            except Exception:
+                pass
+            if not dest_path:
+                return None
+            shutil.copy2(source_path, dest_path)
+            return dest_path
+        except Exception as e:
+            self.last_error = str(e)
+            return None
+    
+    def generate_excel(self, predictions: List[Dict], summary: Dict, output_path: str = "landmark_analysis.xlsx") -> Optional[str]:
+        """Generate Excel report with Raw Predictions, Summary, Verdict, and Geospatial sheets."""
+        try:
+            import pandas as pd
+            
+            verdict_text = self.build_compatibility_verdict(predictions, summary)
+            summary_out = dict(summary or {})
+            summary_out["compatibility_verdict"] = verdict_text
+            
+            raw_serialized = []
+            for p in predictions or []:
+                row = dict(p)
+                for k, v in list(row.items()):
+                    if isinstance(v, (dict, list, tuple)):
+                        row[k] = json.dumps(v, ensure_ascii=False)
+                raw_serialized.append(row)
+            
+            engine = "xlsxwriter" if 'xlsxwriter' in sys.modules else "openpyxl"
+            try:
+                import xlsxwriter
+                engine = "xlsxwriter"
+            except ImportError:
+                pass
+            
+            with pd.ExcelWriter(output_path, engine=engine) as writer:
+                pd.DataFrame(raw_serialized).to_excel(writer, sheet_name='Raw Predictions', index=False)
+                pd.DataFrame([summary_out]).to_excel(writer, sheet_name='Summary Statistics', index=False)
+                pd.DataFrame([{"compatibility_verdict": verdict_text}]).to_excel(writer, sheet_name='Compatibility Verdict', index=False)
+                
+                geo_data = [{'Landmark': p.get('name', p.get('prediction')), 'Latitude': p['coords'][0],
+                            'Longitude': p['coords'][1], 'Confidence': p.get('confidence')}
+                           for p in predictions if p.get('coords')]
+                pd.DataFrame(geo_data).to_excel(writer, sheet_name='Geospatial Coordinates', index=False)
+                
+                enhanced = []
+                for p in predictions or []:
+                    er = dict(p)
+                    desired_obj = p.get('desired_object', p.get('prediction'))
+                    presence_predicted = p.get('presence_predicted')
+                    er['Target Object Detected'] = 'Yes' if presence_predicted else 'No' if presence_predicted is not None else ('Yes' if desired_obj and p.get('prediction') == desired_obj else 'N/A')
+                    
+                    confidence = p.get('confidence', 0)
+                    er['Compatibility Verdict'] = 'HIGH' if confidence >= 0.8 else 'MODERATE' if confidence >= 0.6 else 'LOW' if isinstance(confidence, (int, float)) else 'UNKNOWN'
+                    
+                    for k, v in list(er.items()):
+                        if isinstance(v, (dict, list, tuple)):
+                            er[k] = json.dumps(v, ensure_ascii=False)
+                    enhanced.append(er)
+                
+                pd.DataFrame(enhanced).to_excel(writer, sheet_name='Raw Predictions', index=False)
+            
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to generate Excel report: {e}")
+            return None
+    
+    def send_email(self, receiver_email: str, attachment_path: str,
+                   body: str = "Please find the landmark recognition report attached.") -> bool:
+        """Send email with report attachment using SMTP."""
+        self.last_error = None
+        
+        if not receiver_email:
+            self.last_error = "No receiver email provided"
+            logger.error(self.last_error)
+            return False
+        
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        sender_email = os.getenv("SENDER_EMAIL")
+        sender_password = os.getenv("SENDER_PASSWORD")
+        use_ssl = os.getenv("SMTP_USE_SSL", "true").lower() == "true"
+        
+        if not sender_email or not sender_password:
+            self.last_error = "SMTP credentials not configured. Set SENDER_EMAIL and SENDER_PASSWORD in .env file."
+            logger.error(self.last_error)
+            return False
+        
+        try:
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email.mime.text import MIMEText
+            from email import encoders
+            
+            msg = MIMEMultipart()
+            msg['From'] = sender_email
+            msg['To'] = receiver_email
+            msg['Subject'] = "Landmark Recognition Report"
+            msg.attach(MIMEText(body, 'plain'))
+            
+            if attachment_path and os.path.exists(attachment_path):
+                with open(attachment_path, 'rb') as f:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(attachment_path)}')
+                msg.attach(part)
+            
+            if use_ssl:
+                server = smtplib.SMTP_SSL(smtp_server, 465)
+            else:
+                server = smtplib.SMTP(smtp_server, smtp_port)
+                server.starttls()
+            
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, receiver_email, msg.as_string())
+            server.quit()
+            
+            logger.info(f"Email sent successfully to {receiver_email}")
+            return True
+            
+        except smtplib.SMTPAuthenticationError:
+            self.last_error = "SMTP authentication failed. Check your credentials."
+            logger.error(self.last_error)
+            return False
+        except smtplib.SMTPException as e:
+            self.last_error = f"SMTP error: {e}"
+            logger.error(self.last_error)
+            return False
+        except Exception as e:
+            self.last_error = f"Failed to send email: {e}"
+            logger.error(self.last_error)
+            return False
+
+
+class LandmarkSystem:
+    """Main orchestrator coordinating DataManager, LandmarkClassifier, GeoMapper, and ReportManager."""
+    
+    def __init__(self):
+        logger.info("Initializing Landmark Recognition System")
+        self.data_manager = DataManager()
+        self.classifier = LandmarkClassifier()
+        self.geo_mapper = GeoMapper()
+        self.report_manager = ReportManager()
+        self.email_receiver = None
+    
+    def run_training_cycle(self, landmarks: List[str], images_per_landmark: int = 5,
+                          sleep_interval: int = 2, searches_before_sleep: int = 1) -> bool:
+        """Search, download, and train model for landmarks."""
+        all_image_paths, all_labels = [], []
+        
+        for i, landmark in enumerate(landmarks):
+            try:
+                image_paths = self.data_manager.process_landmark(landmark, max_images=images_per_landmark)
+                if image_paths:
+                    all_image_paths.extend(image_paths)
+                    all_labels.extend([landmark] * len(image_paths))
+                if (i + 1) % searches_before_sleep == 0 and (i + 1) < len(landmarks):
+                    time.sleep(sleep_interval)
+            except Exception as e:
+                logger.error(f"Error processing landmark {landmark}: {e}")
+                continue
+        
+        if not all_image_paths:
+            return False
+        
+        dataset_root = "datasets"
+        training_image_paths, training_labels = [], []
+        allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
+        
+        if os.path.isdir(dataset_root):
+            for folder in os.listdir(dataset_root):
+                if folder.startswith("__"):
+                    continue
+                folder_path = os.path.join(dataset_root, folder)
+                if not os.path.isdir(folder_path):
+                    continue
+                label = folder.replace("_", " ")
+                for fname in os.listdir(folder_path):
+                    if fname.startswith("temp_"):
+                        continue
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in allowed_exts:
+                        training_image_paths.append(os.path.join(folder_path, fname))
+                        training_labels.append(label)
+        else:
+            training_image_paths, training_labels = all_image_paths, all_labels
+        
+        if not training_image_paths:
+            return False
+        
+        unique_labels = set(training_labels)
+        if len(unique_labels) < 2 and not self.classifier.is_trained:
+            return False
+        
+        result = self.classifier.train_reward_penalty(training_image_paths, training_labels)
+        return result.get("epochs_done", 0) > 0
+    
+    def analyze_landmarks(self, inputs_to_analyze: List[str]) -> Tuple[List[Dict], Dict, Optional[str]]:
+        """Predict, geocode, map, and report on input landmarks/images."""
+        results = []
+        allowed_image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+        
+        for item in inputs_to_analyze:
+            raw = (item or "").strip()
+            if not raw:
+                continue
+            
+            is_file = os.path.isfile(raw)
+            ext = os.path.splitext(raw)[1].lower() if is_file else ""
+            
+            if is_file and ext in allowed_image_exts:
+                try:
+                    pred_data = self.classifier.predict(raw)
+                    resolved = pred_data.get("prediction") or "Unknown"
+                    coords = self.geo_mapper.get_coordinates(resolved) if resolved not in {"Unknown", "Error"} else None
+                    results.append({"name": os.path.basename(raw), "input_type": "image", "input_value": raw,
+                                  "prediction": pred_data.get("prediction"), "confidence": pred_data.get("confidence"),
+                                  "all_probs": pred_data.get("all_probs"), "resolved_query": resolved, "coords": coords, "status": None})
+                except Exception as e:
+                    logger.error(f"Error predicting image {raw}: {e}")
+                continue
+            
+            landmark = raw
+            pred_data = {"prediction": None, "confidence": None, "all_probs": None}
+            status = None
+            presence_threshold = 0.5
+            evidence_images = []
+            
+            try:
+                max_evidence_images = 5
+                query_variants = [landmark, f"{landmark} architecture interior", f"{landmark} architecture exterior"]
+                
+                urls, seen_urls = [], set()
+                for q in query_variants:
+                    remaining = max_evidence_images - len(urls)
+                    if remaining <= 0:
+                        break
+                    for u in self.data_manager.search_images(q, max_results=remaining):
+                        if u not in seen_urls:
+                            seen_urls.add(u)
+                            urls.append(u)
+                            if len(urls) >= max_evidence_images:
+                                break
+                
+                analysis_folder = f"__analysis__{landmark.replace(' ', '_')}"
+                for u in urls:
+                    p = self.data_manager.download_image(u, analysis_folder)
+                    if p:
+                        evidence_images.append(p)
+                
+                if evidence_images and self.classifier.is_trained:
+                    probs_sum, hits = {}, 0
+                    for p in evidence_images:
+                        pred = self.classifier.predict(p)
+                        for cls, pr in (pred.get("all_probs") or {}).items():
+                            probs_sum[cls] = probs_sum.get(cls, 0.0) + float(pr)
+                        if pred.get("prediction") == landmark:
+                            hits += 1
+                    
+                    avg_probs = {cls: (val / len(evidence_images)) for cls, val in probs_sum.items()} if probs_sum else {}
+                    if avg_probs:
+                        best_cls = max(avg_probs, key=avg_probs.get)
+                        pred_data = {"prediction": best_cls, "confidence": float(avg_probs.get(best_cls, 0.0)), "all_probs": avg_probs}
+                    
+                    desired_prob = float(avg_probs.get(landmark, 0.0)) if avg_probs else 0.0
+                    presence_ratio = hits / len(evidence_images)
+                    presence_predicted = (desired_prob >= presence_threshold) or (presence_ratio >= 0.5)
+                    status = "Present" if presence_predicted else "Absent"
+                else:
+                    desired_prob, presence_ratio, presence_predicted = None, None, None
+                    
+            except Exception as e:
+                logger.error(f"Error analyzing landmark {landmark}: {e}")
+            finally:
+                for p in evidence_images:
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception:
+                        pass
+            
+            coords = self.geo_mapper.get_coordinates(landmark)
+            results.append({"name": landmark, "input_type": "text", "input_value": landmark,
+                          "prediction": pred_data.get("prediction"),
+                          "confidence": pred_data.get("confidence") if pred_data.get("confidence") is not None else 1.0,
+                          "all_probs": pred_data.get("all_probs"), "resolved_query": landmark, "coords": coords,
+                          "status": status, "desired_object": landmark, "presence_score": desired_prob,
+                          "presence_ratio": presence_ratio, "presence_predicted": presence_predicted,
+                          "presence_threshold": presence_threshold, "evidence_images_count": len(evidence_images)})
+        
+        if not results:
+            return [], {}, None
+        
+        scored = [r for r in results if r.get("status") in {"Correct", "Incorrect"}]
+        correct_count = sum(1 for r in scored if r["status"] == "Correct")
+        confidences = [r.get("confidence") for r in results if isinstance(r.get("confidence"), (int, float))]
+        
+        summary = {"total_landmarks": len(results), "correct_predictions": correct_count,
+                  "accuracy": (correct_count / len(scored)) if scored else None,
+                  "avg_confidence": (sum(confidences) / len(confidences)) if confidences else None}
+        
+        map_path = self.geo_mapper.create_map(results)
+        excel_path = self.report_manager.generate_excel(results, summary)
+        
+        return results, summary, excel_path
+    
+    def refine_with_chat(self, results: List[Dict], excel_path: str = None):
+        """Interactive chatbot for refining results and triggering retraining."""
+        if not results:
+            print("No results to refine")
+            return results
+        
+        print("\n" + "=" * 60)
+        print("REFINEMENT CHAT - Commands: list, correct <idx> to <label>, retrain, quit")
+        print("=" * 60)
+        
+        corrected = {}
+        
+        def interpret(text: str) -> Dict[str, Any]:
+            raw = (text or "").strip()
+            low = raw.lower()
+            
+            if not raw:
+                return {"intent": "empty"}
+            if re.search(r"\b(quit|exit|bye|stop|end)\b", low):
+                return {"intent": "quit"}
+            if re.search(r"\b(help|commands|what can you do|options)\b", low):
+                return {"intent": "help"}
+            if low == "list" or re.search(r"\b(show|list|display)\b.*\b(results|predictions|items|list|all)\b", low):
+                return {"intent": "list"}
+            
+            m = re.search(r"\b(set|change|correct|update|fix)\b.*?\b(\d+)\b.*?\b(to|as|=)\b\s*(.+)$", raw, flags=re.IGNORECASE)
+            if m:
+                return {"intent": "set", "index": int(m.group(2)), "label": (m.group(4) or "").strip()}
+            
+            m = re.match(r"^\s*(\d+)\s*[:=\-]\s*(.+?)\s*$", raw)
+            if m:
+                return {"intent": "set", "index": int(m.group(1)), "label": (m.group(2) or "").strip()}
+            
+            if low == "retrain" or re.search(r"\b(retrain|re-train|train again|learn|update model)\b", low):
+                return {"intent": "retrain"}
+            
+            if low == "send" or re.search(r"\b(send|email|mail)\b", low):
+                return {"intent": "send"}
+            
+            if re.search(r"\b(where|path|location)\b.*\b(report|excel)\b", low):
+                return {"intent": "report_path"}
+            if re.search(r"\b(where|path|location)\b.*\b(map)\b", low):
+                return {"intent": "map_path"}
+            
+            return {"intent": "unknown"}
+        
+        while True:
+            try:
+                msg = input("\n> ").strip()
+            except EOFError:
+                break
+            
+            if not msg:
+                continue
+            
+            parsed = interpret(msg)
+            intent = parsed.get("intent")
+            
+            if intent == "quit":
+                break
+            
+            if intent == "help":
+                print("\nCommands: list, correct <idx> to <label>, retrain, send, quit")
+                continue
+            
+            if intent == "list":
+                for idx, r in enumerate(results):
+                    print(f"  [{idx}] {r.get('input_type')} name={r.get('name')} pred={r.get('prediction')} conf={r.get('confidence')}")
+                continue
+            
+            if intent == "set":
+                idx = parsed.get("index")
+                if idx < 0 or idx >= len(results):
+                    print("Index out of range")
+                    continue
+                label = (parsed.get("label") or "").strip()
+                if not label:
+                    print("Label cannot be empty")
+                    continue
+                results[idx]["prediction"] = label
+                results[idx]["resolved_query"] = label
+                results[idx]["coords"] = self.geo_mapper.get_coordinates(label)
+                corrected[idx] = label
+                print(f"Updated [{idx}] -> {label}")
+                continue
+            
+            if intent == "retrain":
+                image_paths, image_labels = [], []
+                for idx, label in corrected.items():
+                    r = results[idx]
+                    if r.get("input_type") == "image" and r.get("input_value") and os.path.isfile(r["input_value"]):
+                        image_paths.append(r["input_value"])
+                        image_labels.append(label)
+                
+                if image_paths and (self.classifier.is_trained or len(set(image_labels)) >= 2):
+                    result = self.classifier.train_reward_penalty(image_paths, image_labels, min_epochs=1, max_epochs=8)
+                    for r in results:
+                        if r.get("input_type") == "image" and r.get("input_value") and os.path.isfile(r["input_value"]):
+                            pred = self.classifier.predict(r["input_value"])
+                            r["prediction"] = pred.get("prediction")
+                            r["confidence"] = pred.get("confidence")
+                            rq = r.get("prediction") or "Unknown"
+                            r["resolved_query"] = rq
+                            r["coords"] = self.geo_mapper.get_coordinates(rq) if rq not in {"Unknown", "Error"} else None
+                    print(f"Retrain complete. Epochs: {result.get('epochs_done', 0)}")
+                else:
+                    print("Not enough image feedback to retrain")
+                continue
+            
+            if intent == "send":
+                email = self.email_receiver
+                if not email:
+                    email = input("Enter email address: ").strip()
+                    if email:
+                        self.email_receiver = email
+                if not email:
+                    print("No email provided")
+                    continue
+                if not excel_path:
+                    print("No report file to send")
+                    continue
+                print(f"Sending report to {email}...")
+                success = self.report_manager.send_email(email, excel_path)
+                print("Email sent successfully!" if success else f"Failed: {self.report_manager.last_error}")
+                continue
+            
+            if intent == "report_path":
+                print(f"Report: {os.path.abspath(excel_path) if excel_path else 'Not generated'}")
+                continue
+            
+            if intent == "map_path":
+                print(f"Map: {os.path.abspath('landmark_map.html')}")
+                continue
+            
+            print("Unknown command. Try: list, correct, retrain, quit")
+        
+        return results
+
+
+def main():
+    """Main CLI entry point for the Landmark Recognition System."""
+    print("\n" + "=" * 70)
+    print("  LANDMARK RECOGNITION SYSTEM - HOG-based architectural landmark classifier")
+    print("=" * 70)
+    
+    try:
+        system = LandmarkSystem()
+    except Exception as e:
+        logger.error(f"Failed to initialize system: {e}")
+        return 1
+    
+    email_pattern = r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"
+    user_email = None
+    
+    while not user_email:
+        try:
+            email_input = input("\nEnter your email address (required for training): ").strip()
+        except EOFError:
+            return 0
+        
+        if email_input:
+            match = re.search(email_pattern, email_input)
+            if match:
+                user_email = match.group(0)
+                system.email_receiver = user_email
+                print(f"Email registered: {user_email}")
+            else:
+                print("Invalid email format")
+        else:
+            print("Email is required to proceed")
+    
+    print("\n" + "-" * 70)
+    print("TRAINING PHASE")
+    print("-" * 70)
+    
+    try:
+        train_input = input("Enter landmark names to train on (separated by ';'): ").strip()
+    except EOFError:
+        return 0
+    
+    train_landmarks = [l.strip() for l in train_input.split(";") if l.strip()]
+    
+    if train_landmarks:
+        sleep_interval, searches_before_sleep = 2, 1
+        try:
+            sleep_input = input("Sleep seconds between batches (default 2): ").strip()
+            if sleep_input.isdigit():
+                sleep_interval = int(sleep_input)
+            batch_input = input("Sleep after how many searches (default 1): ").strip()
+            if batch_input.isdigit():
+                searches_before_sleep = int(batch_input)
+        except EOFError:
+            pass
+        
+        success = system.run_training_cycle(train_landmarks, sleep_interval=sleep_interval, searches_before_sleep=searches_before_sleep)
+        print("Training completed successfully!" if success else "Training completed with warnings")
+    
+    print("\n" + "-" * 70)
+    print("ANALYSIS PHASE")
+    print("-" * 70)
+    
+    try:
+        predict_input = input("Enter text queries and/or image paths (separated by ';'): ").strip()
+    except EOFError:
+        return 0
+    
+    predict_items = [l.strip() for l in predict_input.split(";") if l.strip()]
+    
+    if predict_items:
+        results, summary, excel_path = system.analyze_landmarks(predict_items)
+        
+        if excel_path:
+            saved_path = system.report_manager.prompt_save_report(excel_path)
+            if saved_path:
+                excel_path = saved_path
+        
+        system.refine_with_chat(results, excel_path)
+        
+        print("\n" + "=" * 70)
+        print("ANALYSIS SUMMARY")
+        print("=" * 70)
+        print(f"Total Processed: {summary.get('total_landmarks', 0)}")
+        print(f"Accuracy: {summary['accuracy']:.2%}" if summary.get("accuracy") else "Accuracy: N/A")
+        print(f"Avg Confidence: {summary['avg_confidence']:.2%}" if summary.get("avg_confidence") else "Avg Confidence: N/A")
+        print(f"\nMap: {os.path.abspath('landmark_map.html')}")
+        print(f"Report: {os.path.abspath(excel_path) if excel_path else 'Not saved'}")
+    
+    print("\nSession complete!")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    
+    sys.exit(main())
