@@ -4,6 +4,13 @@
     "dataset_id": "erdTAgeomday",
     "url": "https://coastwatch.pfeg.noaa.gov/erddap/info/erdTAgeomday/index.csv",
     "observations_after_missing_value_filter": 201,
+    "raw_observations": 201,
+    "complete_observations": 201,
+    "removed_incomplete_observations": 0,
+    "raw_period": [
+      "1992-10-01",
+      "2009-06-01"
+    ],
     "locations": [
       [
         300,
@@ -30,7 +37,7 @@
   },
   "task": {
     "type": "one-step multi-output regression",
-    "features": "1, 2, 3, 6, and 12-month current lags plus speed, spatial summaries, recent change, and seasonal phase (89 values)",
+    "features": "1, 2, 3, 6, and 12-month current lags plus speed, spatial summaries, recent change, seasonal phase, and 3/6/12/24-month rolling statistics (312 values)",
     "targets": "next monthly u/v velocity at five locations (10 values)"
   },
   "split": {
@@ -49,22 +56,17 @@
     "chronological": true
   },
   "regression": {
-    "random_forest": {
-      "mae_m_per_s": 0.0358515385747,
-      "rmse_m_per_s": 0.06843331538832731,
-      "r2_uniform_average": -0.11253691320831034
-    },
     "quadratic_ridge": {
       "selected_alpha": 10000.0,
       "validation": {
-        "mae_m_per_s": 0.03604258752799542,
-        "rmse_m_per_s": 0.06870088976422238,
-        "r2_uniform_average": -0.2827577460749517
+        "mae_m_per_s": 0.03746563508597152,
+        "rmse_m_per_s": 0.07257217539381638,
+        "r2_uniform_average": -0.24458853649122805
       },
       "test": {
-        "mae_m_per_s": 0.03900360485050243,
-        "rmse_m_per_s": 0.07661841615871572,
-        "r2_uniform_average": -0.5069872842215146
+        "mae_m_per_s": 0.03967487653412529,
+        "rmse_m_per_s": 0.07782366955238959,
+        "r2_uniform_average": -0.545586400130135
       }
     },
     "persistence_baseline": {
@@ -73,25 +75,302 @@
       "r2_uniform_average": -0.8889910405790594
     },
     "mean_baseline": {
-      "mae_m_per_s": 0.037335332497656845,
-      "rmse_m_per_s": 0.06915743449990493,
-      "r2_uniform_average": -0.11120537033511317
+      "mae_m_per_s": 0.037211016681563784,
+      "rmse_m_per_s": 0.0687952412015898,
+      "r2_uniform_average": -0.11194525081927764
+    }
+  },
+  "rolling_origin_validation": {
+    "purpose": "Expanding training windows before the untouched 2008-2009 test period",
+    "uncertainty_note": "Quadratic-ridge intervals use a 12-month historical calibration tail; coverage is empirical and not guaranteed under serial dependence.",
+    "folds": [
+      {
+        "period": [
+          "1999-10-01",
+          "2000-09-01"
+        ],
+        "train_rows": 60,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.04669870791610857,
+          "rmse_m_per_s": 0.09659650222645269,
+          "r2_uniform_average": -0.1326692533452242
+        },
+        "climatology": {
+          "mae_m_per_s": 0.042858320397500003,
+          "rmse_m_per_s": 0.08093622687546075,
+          "r2_uniform_average": -0.15362153552648333
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.04099550447416666,
+          "rmse_m_per_s": 0.07528607116937283,
+          "r2_uniform_average": -0.16693398955063452
+        },
+        "persistence": {
+          "mae_m_per_s": 0.04430393268333334,
+          "rmse_m_per_s": 0.08124721762853239,
+          "r2_uniform_average": -0.8991035844083886
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.9166666666666666,
+          "mean_width": 0.17209084605431874
+        }
+      },
+      {
+        "period": [
+          "2000-10-01",
+          "2001-09-01"
+        ],
+        "train_rows": 72,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.030008286947403845,
+          "rmse_m_per_s": 0.05168571417536358,
+          "r2_uniform_average": 0.01289429545888091
+        },
+        "climatology": {
+          "mae_m_per_s": 0.03063895546875,
+          "rmse_m_per_s": 0.05815925912616317,
+          "r2_uniform_average": -0.021838324791942677
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.043384582334027776,
+          "rmse_m_per_s": 0.07703659088069585,
+          "r2_uniform_average": -0.7782674880446069
+        },
+        "persistence": {
+          "mae_m_per_s": 0.051471456250000006,
+          "rmse_m_per_s": 0.09576981766784787,
+          "r2_uniform_average": -1.667421535804392
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.9583333333333334,
+          "mean_width": 0.23253784460631416
+        }
+      },
+      {
+        "period": [
+          "2001-10-01",
+          "2002-09-01"
+        ],
+        "train_rows": 84,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.0353699145811769,
+          "rmse_m_per_s": 0.07242923931096172,
+          "r2_uniform_average": -0.5178691720759414
+        },
+        "climatology": {
+          "mae_m_per_s": 0.03917360693511905,
+          "rmse_m_per_s": 0.08455578247315557,
+          "r2_uniform_average": -0.23703266505664006
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.04027578465059524,
+          "rmse_m_per_s": 0.08112346198562335,
+          "r2_uniform_average": -2.3615730123052443
+        },
+        "persistence": {
+          "mae_m_per_s": 0.04612331800833334,
+          "rmse_m_per_s": 0.08529100268640177,
+          "r2_uniform_average": -3.932031043015072
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.8916666666666667,
+          "mean_width": 0.13369627449673532
+        }
+      },
+      {
+        "period": [
+          "2002-10-01",
+          "2003-09-01"
+        ],
+        "train_rows": 96,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.045395836797635966,
+          "rmse_m_per_s": 0.08632075818537067,
+          "r2_uniform_average": -0.15643485901524012
+        },
+        "climatology": {
+          "mae_m_per_s": 0.04473841404010416,
+          "rmse_m_per_s": 0.10713982640326113,
+          "r2_uniform_average": -0.03301078300016354
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.07718365560885417,
+          "rmse_m_per_s": 0.16893287508891616,
+          "r2_uniform_average": -0.654066624091372
+        },
+        "persistence": {
+          "mae_m_per_s": 0.08670114671249998,
+          "rmse_m_per_s": 0.18884857639780778,
+          "r2_uniform_average": -1.0809025993078811
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.9,
+          "mean_width": 0.19665615801194553
+        }
+      },
+      {
+        "period": [
+          "2003-10-01",
+          "2004-09-01"
+        ],
+        "train_rows": 108,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.029432452936215575,
+          "rmse_m_per_s": 0.06057971479944281,
+          "r2_uniform_average": -0.38472950438339765
+        },
+        "climatology": {
+          "mae_m_per_s": 0.029625302908611113,
+          "rmse_m_per_s": 0.05972106650073459,
+          "r2_uniform_average": -0.2995722927813868
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.04049004679787037,
+          "rmse_m_per_s": 0.07838455720076455,
+          "r2_uniform_average": -0.8768345179251666
+        },
+        "persistence": {
+          "mae_m_per_s": 0.037295910177499995,
+          "rmse_m_per_s": 0.07411452097084036,
+          "r2_uniform_average": -1.2432556483290085
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.9583333333333334,
+          "mean_width": 0.21813565519912012
+        }
+      },
+      {
+        "period": [
+          "2004-10-01",
+          "2005-09-01"
+        ],
+        "train_rows": 120,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.04093984181782133,
+          "rmse_m_per_s": 0.07222773474022474,
+          "r2_uniform_average": -0.37757837872590383
+        },
+        "climatology": {
+          "mae_m_per_s": 0.036815550077249994,
+          "rmse_m_per_s": 0.06911092012329151,
+          "r2_uniform_average": -0.2502777144442302
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.04043660061608334,
+          "rmse_m_per_s": 0.07366935359312807,
+          "r2_uniform_average": -0.6973074930610422
+        },
+        "persistence": {
+          "mae_m_per_s": 0.0454234431,
+          "rmse_m_per_s": 0.08211507274942453,
+          "r2_uniform_average": -0.5332430128876824
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.8416666666666667,
+          "mean_width": 0.14744677336745143
+        }
+      },
+      {
+        "period": [
+          "2005-10-01",
+          "2006-09-01"
+        ],
+        "train_rows": 132,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.03208346410343392,
+          "rmse_m_per_s": 0.05783624754201094,
+          "r2_uniform_average": -0.09942098911836235
+        },
+        "climatology": {
+          "mae_m_per_s": 0.03230880758901515,
+          "rmse_m_per_s": 0.0602822083836851,
+          "r2_uniform_average": -0.09346387104646747
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.0407919501334091,
+          "rmse_m_per_s": 0.07517087734474542,
+          "r2_uniform_average": -0.8094972309101156
+        },
+        "persistence": {
+          "mae_m_per_s": 0.04180305755166667,
+          "rmse_m_per_s": 0.07415226903157925,
+          "r2_uniform_average": -1.1026505541021225
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.9666666666666667,
+          "mean_width": 0.1817008563621977
+        }
+      },
+      {
+        "period": [
+          "2006-10-01",
+          "2007-09-01"
+        ],
+        "train_rows": 144,
+        "test_rows": 12,
+        "quadratic_ridge": {
+          "mae_m_per_s": 0.04231454267730209,
+          "rmse_m_per_s": 0.08572904901024296,
+          "r2_uniform_average": -0.1352556215555541
+        },
+        "climatology": {
+          "mae_m_per_s": 0.04064871208020833,
+          "rmse_m_per_s": 0.07967861594747244,
+          "r2_uniform_average": 0.09154380485762324
+        },
+        "anomaly_persistence": {
+          "mae_m_per_s": 0.04912988800173612,
+          "rmse_m_per_s": 0.08864224903270156,
+          "r2_uniform_average": -1.0590139293866643
+        },
+        "persistence": {
+          "mae_m_per_s": 0.05952061390833334,
+          "rmse_m_per_s": 0.10880591406407865,
+          "r2_uniform_average": -0.9355908700215163
+        },
+        "quadratic_ridge_interval_90": {
+          "coverage": 0.875,
+          "mean_width": 0.15756744258638491
+        }
+      }
+    ],
+    "mean_metrics": {
+      "quadratic_ridge": {
+        "mae_m_per_s": 0.037780380972137276,
+        "rmse_m_per_s": 0.07292561999875877,
+        "r2_uniform_average": -0.22388293534509285
+      },
+      "climatology": {
+        "mae_m_per_s": 0.037100958687069724,
+        "rmse_m_per_s": 0.07494798822915302,
+        "r2_uniform_average": -0.12465917272371134
+      },
+      "anomaly_persistence": {
+        "mae_m_per_s": 0.04658600157709285,
+        "rmse_m_per_s": 0.08978075453699347,
+        "r2_uniform_average": -0.9254367856593558
+      },
+      "persistence": {
+        "mae_m_per_s": 0.051580359798958336,
+        "rmse_m_per_s": 0.09879304889956408,
+        "r2_uniform_average": -1.4242748559845078
+      }
     }
   },
   "classification_note": "Secondary threshold diagnostic only; continuous current prediction is the native task.",
-  "classification_thresholded": {
+  "classification_thresholded_quadratic_ridge": {
     "threshold": "per-target training median",
     "accuracy": 0.5444444444444444,
-    "precision": 0.5757575757575758,
-    "recall": 0.41304347826086957,
-    "f1": 0.4810126582278481,
-    "roc_auc": 0.47047924901185767
-  },
-  "classification_thresholded_quadratic_ridge": {
-    "accuracy": 0.5777777777777777,
-    "precision": 0.5975609756097561,
-    "recall": 0.532608695652174,
-    "f1": 0.5632183908045977,
-    "roc_auc": 0.4788784584980237
+    "precision": 0.5714285714285714,
+    "recall": 0.4731182795698925,
+    "f1": 0.5176470588235295,
+    "roc_auc": 0.4909158324063775
   }
 }

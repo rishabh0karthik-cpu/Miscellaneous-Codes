@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import tempfile
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import numpy as np
@@ -20,12 +17,12 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+from quadratic_current_model import QuadraticCurrentPredictor
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = Path(__file__).with_name("dummy_current_patterns_2006_2025.csv")
 REPORT_PATH = Path(__file__).with_name("model_diagnostic_report.json")
 ROC_PATH = Path(__file__).with_name("roc_curve_points.csv")
-MODEL_PATH = ROOT / "Code-2:Del_Niño"
 
 
 def load_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -48,26 +45,13 @@ def regression_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, f
     }
 
 
-def load_predictor():
-    # The current source is extensionless and runs a demo at import time. A
-    # temporary working directory keeps that demo output out of the repository.
-    with tempfile.TemporaryDirectory() as workdir:
-        previous_directory = os.getcwd()
-        os.chdir(workdir)
-        try:
-            return SourceFileLoader("ocean_model", str(MODEL_PATH)).load_module().OceanCurrentPredictor
-        finally:
-            os.chdir(previous_directory)
-
-
 def main() -> None:
     dates, features, targets = load_data()
     train = dates < "2022-01-01"
     validation = (dates >= "2022-01-01") & (dates < "2024-01-01")
     test = dates >= "2024-01-01"
 
-    predictor_type = load_predictor()
-    predictor = predictor_type()
+    predictor = QuadraticCurrentPredictor()
     predictor.fit(features[train], targets[train])
     validation_predictions = predictor.predict(features[validation])
     predictions = predictor.predict(features[test])
@@ -91,7 +75,7 @@ def main() -> None:
         },
         "regression": {
             "validation": regression_metrics(targets[validation], validation_predictions),
-            "random_forest": regression_metrics(targets[test], predictions),
+            "quadratic_ridge": regression_metrics(targets[test], predictions),
             "mean_baseline": regression_metrics(targets[test], train_mean),
             "persistence_baseline": regression_metrics(targets[test], persistence),
         },

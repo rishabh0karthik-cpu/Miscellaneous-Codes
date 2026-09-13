@@ -1,13 +1,29 @@
+"""Legacy compatibility module for the validated current-forecast pipeline."""
+
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
+
+try:
+    from testing.quadratic_current_model import QuadraticCurrentPredictor
+except ModuleNotFoundError:
+    from importlib.util import module_from_spec, spec_from_file_location
+    from pathlib import Path
+
+    _MODEL_PATH = Path(__file__).resolve().parent / "testing" / "quadratic_current_model.py"
+    _MODEL_SPEC = spec_from_file_location("quadratic_current_model", _MODEL_PATH)
+    if _MODEL_SPEC is None or _MODEL_SPEC.loader is None:
+        raise ImportError("could not load the canonical quadratic current model")
+    _MODEL_MODULE = module_from_spec(_MODEL_SPEC)
+    _MODEL_SPEC.loader.exec_module(_MODEL_MODULE)
+    QuadraticCurrentPredictor = _MODEL_MODULE.QuadraticCurrentPredictor
 
 
 class OceanCurrentPredictor:
     def __init__(self):
-        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.model = QuadraticCurrentPredictor()
 
     def fit(self, feature_data, current_patterns):
         self.model.fit(feature_data, current_patterns)
+        return self
 
     def predict(self, feature_data):
         return self.model.predict(feature_data)
@@ -24,6 +40,8 @@ class LinearCurrentDynamics:
         current_patterns = np.asarray(current_patterns, dtype=float)
         if current_patterns.ndim != 2 or current_patterns.shape[0] < 2:
             raise ValueError("current_patterns must contain at least two observations")
+        if current_patterns.shape[1] == 0 or not np.isfinite(current_patterns).all():
+            raise ValueError("current_patterns must be non-empty and finite")
 
         previous_patterns = current_patterns[:-1]
         next_patterns = current_patterns[1:]
@@ -39,6 +57,10 @@ class LinearCurrentDynamics:
         if self.transition_matrix is None:
             raise RuntimeError("fit must be called before predict_next")
         current_pattern = np.asarray(current_pattern, dtype=float)
+        if current_pattern.ndim != 1 or current_pattern.shape[0] != self.transition_matrix.shape[0]:
+            raise ValueError("current_pattern must match the fitted feature dimension")
+        if not np.isfinite(current_pattern).all():
+            raise ValueError("current_pattern must contain only finite values")
         return current_pattern @ self.transition_matrix
 
     def predict_sequence(self, initial_pattern, steps):
@@ -52,12 +74,18 @@ class LinearCurrentDynamics:
         return np.asarray(predictions)
 
 
-def plot_current_paths(initial_positions, velocity_forecast, save_path=None):
+def plot_current_paths(
+    initial_positions,
+    velocity_forecast,
+    save_path=None,
+    time_step_seconds=30 * 24 * 60 * 60,
+):
     """Plot predicted ocean-current paths from longitude/latitude seed points.
 
     ``initial_positions`` has shape ``(locations, 2)`` and stores longitude,
     latitude pairs. ``velocity_forecast`` has shape ``(steps, locations, 2)``
-    and stores eastward, northward movement for each forecast step.
+    and stores eastward and northward velocities in m/s. ``time_step_seconds`` converts
+    velocity into geographic displacement for plotting.
     """
     import matplotlib.pyplot as plt
 
@@ -69,18 +97,28 @@ def plot_current_paths(initial_positions, velocity_forecast, save_path=None):
         raise ValueError("velocity_forecast must have shape (steps, locations, 2)")
     if velocity_forecast.shape[1] != initial_positions.shape[0]:
         raise ValueError("forecast locations must match initial_positions")
+    if time_step_seconds <= 0 or not np.isfinite(time_step_seconds):
+        raise ValueError("time_step_seconds must be positive and finite")
+    if np.any(np.abs(initial_positions[:, 1]) >= 90):
+        raise ValueError("initial latitudes must be strictly between -90 and 90 degrees")
 
+    meters_per_degree_latitude = 111_320.0
+    latitude_radians = np.deg2rad(initial_positions[:, 1])
+    longitude_scale = meters_per_degree_latitude * np.cos(latitude_radians)
+    displacement = velocity_forecast.transpose(1, 0, 2) * time_step_seconds
+    displacement[:, :, 0] /= longitude_scale[:, None]
+    displacement[:, :, 1] /= meters_per_degree_latitude
     paths = np.empty((velocity_forecast.shape[1], velocity_forecast.shape[0] + 1, 2))
     paths[:, 0] = initial_positions
-    paths[:, 1:] = initial_positions[:, None, :] + np.cumsum(
-        velocity_forecast.transpose(1, 0, 2), axis=1
-    )
+    paths[:, 1:] = initial_positions[:, None, :] + np.cumsum(displacement, axis=1)
     paths[:, :, 0] = ((paths[:, :, 0] + 180) % 360) - 180
     paths[:, :, 1] = np.clip(paths[:, :, 1], -90, 90)
 
     figure, axes = plt.subplots(figsize=(13, 7))
     try:
-        import cartopy.crs as ccrs
+        from importlib import import_module
+
+        ccrs = import_module("cartopy.crs")
 
         plt.close(figure)
         figure = plt.figure(figsize=(13, 7))

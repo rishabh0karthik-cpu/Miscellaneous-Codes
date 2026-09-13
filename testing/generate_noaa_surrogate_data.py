@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.linear_model import Ridge
 
-from current_features import DEFAULT_LAGS, build_feature_row, build_lagged_features
+from current_features import ROLLING_WINDOWS, build_feature_row, build_lagged_features
 from evaluate_noaa_real_data import load_real_targets
 
 OUTPUT = Path(__file__).with_name("noaa_surrogate_patterns.csv")
@@ -61,8 +61,8 @@ def main() -> None:
     training_dates = dates[training]
     model, covariance = fit_surrogate(training_dates, training_current)
     rng = np.random.default_rng(RANDOM_SEED)
-    initial_index = int(rng.integers(0, len(training_current) - max(DEFAULT_LAGS)))
-    initial_end = initial_index + max(DEFAULT_LAGS)
+    initial_index = int(rng.integers(0, len(training_current) - max(ROLLING_WINDOWS)))
+    initial_end = initial_index + max(ROLLING_WINDOWS)
     simulated_dates, simulated = simulate(
         model,
         covariance,

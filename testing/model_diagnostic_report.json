@@ -27,14 +27,14 @@
   },
   "regression": {
     "validation": {
-      "mae": 0.03973183457324869,
-      "rmse": 0.04846737197199073,
-      "r2_uniform_average": 0.9810756757620134
+      "mae": 0.26523009320950525,
+      "rmse": 0.30588053807475696,
+      "r2_uniform_average": 0.30159852356489214
     },
-    "random_forest": {
-      "mae": 0.045529579623890856,
-      "rmse": 0.05436270312424186,
-      "r2_uniform_average": 0.9707878846961808
+    "quadratic_ridge": {
+      "mae": 0.2667010423324246,
+      "rmse": 0.318172744146978,
+      "r2_uniform_average": 0.052723318026878394
     },
     "mean_baseline": {
       "mae": 0.31160630590528887,
@@ -50,14 +50,14 @@
   "classification_note": "Secondary diagnostic only: continuous targets thresholded at each training-target median; not the native regression task.",
   "classification_thresholded": {
     "threshold": "per-target training median",
-    "accuracy": 0.9583333333333334,
-    "precision": 0.9052631578947369,
-    "recall": 0.9885057471264368,
-    "f1": 0.945054945054945,
-    "roc_auc": 0.9984974832845015
+    "accuracy": 0.8541666666666666,
+    "precision": 0.8939393939393939,
+    "recall": 0.6781609195402298,
+    "f1": 0.7712418300653595,
+    "roc_auc": 0.9796408985049959
   },
   "quality_gate": {
     "target": 0.9,
-    "all_requested_metrics_at_least_target": true
+    "all_requested_metrics_at_least_target": false
   }
 }
