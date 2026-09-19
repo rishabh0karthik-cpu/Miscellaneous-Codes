@@ -1,0 +1,492 @@
+import pygame
+import random
+import math
+import sys
+import time
+
+WIDTH, HEIGHT = 800, 600
+TILE_SIZE = 32
+COLS, ROWS = WIDTH // TILE_SIZE, HEIGHT // TILE_SIZE
+NUM_MINES = 50
+VISION_RADIUS = 2
+
+FPS = 60
+
+C_BG = (10, 12, 10)
+C_UNREVEALED_BORDER = (25, 30, 25)
+C_REVEALED_BORDER = (50, 45, 35)
+
+C_FLAG = (180, 40, 40)
+C_BLOOD = (130, 10, 10)
+C_GHOST_OBSERVE = (150, 150, 170, 100)
+C_GHOST_CHASE = (200, 200, 220, 180)
+C_GHOST_ANGRY = (220, 50, 50, 200)
+
+TERRAIN_COLORS = {
+    'grass': (40, 55, 35),
+    'dirt': (55, 48, 38),
+    'mud': (35, 30, 25),
+    'mud_rev': (75, 68, 55),
+    'grass_rev': (80, 95, 75),
+    'dirt_rev': (95, 88, 75)
+}
+
+NUM_COLORS = {
+    1: (100, 150, 240),
+    2: (100, 200, 100),
+    3: (240, 90, 90),
+    4: (180, 70, 180),
+    5: (180, 70, 70),
+    6: (70, 180, 180),
+    7: (220, 220, 220),
+    8: (120, 120, 120)
+}
+
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("CARCOSA: Field of Echoes")
+clock = pygame.time.Clock()
+
+font_numbers = pygame.font.SysFont('courier', 20, bold=True)
+font_ui = pygame.font.SysFont('courier', 16)
+font_dialogue = pygame.font.SysFont('courier', 17, bold=True)
+font_title = pygame.font.SysFont('courier', 42, bold=True)
+
+INTRO_DIALOGUE = [
+    ("COMMANDER", "Peace envoy, your task is clear. Cross the zero-line to the neighboring state."),
+    ("COMMANDER", "A ceasefire was signed, but the retreat was messy. The battlefield remains rigged."),
+    ("ENVOY", "Understood. The peace treaty rests in my hands. I will navigate the field."),
+    ("COMMANDER", "Be cautious... something strange haunts those trenches. Do not lose your mind out there.")
+]
+
+def make_player_sprite():
+    surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+    pygame.draw.ellipse(surf, (0, 0, 0, 80), (6, 22, 20, 8))
+    pygame.draw.rect(surf, (45, 60, 45), (10, 16, 5, 12))
+    pygame.draw.rect(surf, (45, 60, 45), (17, 16, 5, 12))
+    pygame.draw.rect(surf, (20, 25, 20), (9, 26, 6, 4))
+    pygame.draw.rect(surf, (20, 25, 20), (17, 26, 6, 4))
+    pygame.draw.rect(surf, (70, 95, 65), (8, 10, 16, 10))
+    pygame.draw.rect(surf, (50, 70, 45), (10, 12, 12, 7))
+    pygame.draw.ellipse(surf, (220, 180, 140), (10, 5, 12, 9))
+    pygame.draw.rect(surf, (50, 75, 45), (8, 3, 16, 6))
+    pygame.draw.rect(surf, (35, 55, 30), (7, 6, 18, 3))
+    pygame.draw.rect(surf, (30, 30, 30), (12, 8, 2, 2))
+    pygame.draw.rect(surf, (30, 30, 30), (18, 8, 2, 2))
+    return surf
+
+PLAYER_SPRITE = make_player_sprite()
+
+class Tile:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.is_mine = False
+        self.is_revealed = False
+        self.is_flagged = False
+        self.adj_mines = 0
+        self.has_blood = False
+        self.terrain = "grass"
+
+class Game:
+    def __init__(self):
+        self.death_count = 0
+        self.state = "MENU"
+        self.message = ""
+        self.message_timer = 0
+        self.dialogue_idx = 0
+        self.reset_board()
+
+    def generate_terrain(self):
+        for y in range(ROWS):
+            for x in range(COLS):
+                v = math.sin(x * 0.3) + math.cos(y * 0.3) + random.uniform(-0.3, 0.3)
+                if v > 0.6:
+                    self.grid[y][x].terrain = "mud"
+                elif v < -0.2:
+                    self.grid[y][x].terrain = "dirt"
+                else:
+                    self.grid[y][x].terrain = "grass"
+
+    def reset_board(self):
+        self.grid = [[Tile(x, y) for x in range(COLS)] for y in range(ROWS)]
+        self.generate_terrain()
+        self.player_x = COLS // 2
+        self.player_y = ROWS // 2
+        self.first_move = True
+        self.game_over_timer = 0
+        self.move_cooldown = 0
+        
+        self.ghost_active = False
+        self.ghost_x = -10
+        self.ghost_y = -10
+        self.ghost_timer = time.time()
+        self.ghost_step_delay = max(0.2, 1.0 - (self.death_count * 0.15))
+        self.ghost_last_move = time.time()
+        self.ghost_state = "HIDDEN"
+        
+        self.grid[self.player_y][self.player_x].is_revealed = True
+
+    def get_phase_message(self):
+        if self.death_count == 0: return "Navigate the remnants. Right-Click to flag."
+        elif self.death_count == 1: return "You feel you are being watched..."
+        elif self.death_count == 2: return "Carcosa has taken form."
+        else: return "IT HUNGERS."
+
+    def start_intro(self):
+        self.dialogue_idx = 0
+        self.state = "DIALOGUE"
+
+    def place_mines(self, safe_x, safe_y):
+        safe_zone = [(safe_x + dx, safe_y + dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1]]
+        
+        mines_placed = 0
+        while mines_placed < NUM_MINES:
+            rx = random.randint(0, COLS - 1)
+            ry = random.randint(0, ROWS - 1)
+            if (rx, ry) not in safe_zone and not self.grid[ry][rx].is_mine:
+                self.grid[ry][rx].is_mine = True
+                mines_placed += 1
+                
+        for y in range(ROWS):
+            for x in range(COLS):
+                if not self.grid[y][x].is_mine:
+                    count = 0
+                    for dx in [-1, 0, 1]:
+                        for dy in [-1, 0, 1]:
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < COLS and 0 <= ny < ROWS and self.grid[ny][nx].is_mine:
+                                count += 1
+                    self.grid[y][x].adj_mines = count
+
+    def reveal_zeros(self, sx, sy):
+        queue = [(sx, sy)]
+        while queue:
+            cx, cy = queue.pop(0)
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    nx, ny = cx + dx, cy + dy
+                    if 0 <= nx < COLS and 0 <= ny < ROWS:
+                        tile = self.grid[ny][nx]
+                        if not tile.is_revealed and not tile.is_flagged:
+                            tile.is_revealed = True
+                            if tile.adj_mines == 0 and not tile.is_mine:
+                                queue.append((nx, ny))
+
+    def move_player(self, dx, dy):
+        if self.state != "PLAYING": return
+        
+        nx, ny = self.player_x + dx, self.player_y + dy
+        if 0 <= nx < COLS and 0 <= ny < ROWS:
+            self.player_x, self.player_y = nx, ny
+            tile = self.grid[ny][nx]
+            
+            if self.first_move:
+                self.place_mines(nx, ny)
+                self.first_move = False
+                
+            if not tile.is_flagged:
+                if not tile.is_revealed:
+                    tile.is_revealed = True
+                    if tile.is_mine:
+                        self.trigger_death(nx, ny)
+                    elif tile.adj_mines == 0:
+                        self.reveal_zeros(nx, ny)
+            
+            self.check_victory()
+
+    def toggle_flag(self, mx, my):
+        if self.state != "PLAYING": return
+        gx, gy = mx // TILE_SIZE, my // TILE_SIZE
+        if 0 <= gx < COLS and 0 <= gy < ROWS:
+            tile = self.grid[gy][gx]
+            if not tile.is_revealed:
+                tile.is_flagged = not tile.is_flagged
+
+    def trigger_death(self, x, y, caught_by_ghost=False):
+        self.state = "GAMEOVER"
+        self.death_count += 1
+        self.game_over_timer = time.time()
+        self.grid[y][x].has_blood = True
+        
+        if caught_by_ghost:
+            self.set_message("CARCOSA CLAIMED YOU.", 3)
+        else:
+            self.set_message("MISTAKE MADE. SOUL FRACTURED.", 3)
+
+        for row in self.grid:
+            for tile in row:
+                if tile.is_mine:
+                    tile.is_revealed = True
+
+    def check_victory(self):
+        if self.state != "PLAYING": return
+        for y in range(ROWS):
+            for x in range(COLS):
+                tile = self.grid[y][x]
+                if not tile.is_mine and not tile.is_revealed:
+                    return
+        self.state = "VICTORY"
+        self.set_message("YOU SURVIVED... TREATY DELIVERED.", 5)
+        self.game_over_timer = time.time()
+
+    def set_message(self, text, duration):
+        self.message = text
+        self.message_timer = time.time() + duration
+
+    def update_carcosa(self):
+        if self.state != "PLAYING" or self.first_move: return
+        now = time.time()
+
+        if self.death_count == 0:
+            if now - self.ghost_timer > 5:
+                self.ghost_timer = now
+                self.ghost_x = random.choice([0, COLS-1])
+                self.ghost_y = random.randint(0, ROWS-1)
+                self.ghost_state = "OBSERVING"
+            elif now - self.ghost_timer > 1.5 and self.ghost_state == "OBSERVING":
+                self.ghost_state = "HIDDEN"
+
+        elif self.death_count == 1:
+            if self.ghost_state == "HIDDEN":
+                if now - self.ghost_timer > 3:
+                    self.ghost_timer = now
+                    while True:
+                        gx, gy = random.randint(0, COLS-1), random.randint(0, ROWS-1)
+                        if abs(gx - self.player_x) > 5 and abs(gy - self.player_y) > 5:
+                            self.ghost_x, self.ghost_y = gx, gy
+                            self.ghost_state = "CHASING"
+                            break
+            
+            elif self.ghost_state == "CHASING":
+                if now - self.ghost_last_move > 0.8:
+                    self.ghost_last_move = now
+                    if self.ghost_x < self.player_x: self.ghost_x += 1
+                    elif self.ghost_x > self.player_x: self.ghost_x -= 1
+                    
+                    if self.ghost_y < self.player_y: self.ghost_y += 1
+                    elif self.ghost_y > self.player_y: self.ghost_y -= 1
+                
+                if abs(self.ghost_x - self.player_x) <= 3 and abs(self.ghost_y - self.player_y) <= 3:
+                    self.ghost_state = "HIDDEN"
+                    self.ghost_timer = now
+                    self.set_message("It fades into the mist...", 2)
+
+        elif self.death_count >= 2:
+            if self.ghost_state == "HIDDEN":
+                self.ghost_x, self.ghost_y = 0, 0 
+                if self.player_x < COLS//2: self.ghost_x = COLS-1
+                if self.player_y < ROWS//2: self.ghost_y = ROWS-1
+                self.ghost_state = "CHASING"
+            
+            elif self.ghost_state == "CHASING":
+                if now - self.ghost_last_move > self.ghost_step_delay:
+                    self.ghost_last_move = now
+                    if self.ghost_x < self.player_x: self.ghost_x += 1
+                    elif self.ghost_x > self.player_x: self.ghost_x -= 1
+                    else:
+                        if self.ghost_y < self.player_y: self.ghost_y += 1
+                        elif self.ghost_y > self.player_y: self.ghost_y -= 1
+                        
+                    if self.ghost_x == self.player_x and self.ghost_y == self.player_y:
+                        self.trigger_death(self.player_x, self.player_y, caught_by_ghost=True)
+
+    def draw_menu(self, screen):
+        screen.fill((15, 18, 15))
+        title = font_title.render("CARCOSA", True, (200, 50, 50))
+        subtitle = font_ui.render("Field of Echoes", True, (140, 140, 140))
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 80))
+        screen.blit(subtitle, (WIDTH // 2 - subtitle.get_width() // 2, 130))
+
+        btn_start = font_ui.render("[ SPACE ] Begin Mission", True, (220, 220, 220))
+        btn_guide = font_ui.render("[ H ] Field Manual & Rules", True, (160, 160, 160))
+        screen.blit(btn_start, (WIDTH // 2 - btn_start.get_width() // 2, 400))
+        screen.blit(btn_guide, (WIDTH // 2 - btn_guide.get_width() // 2, 440))
+
+    def draw_guide(self, screen):
+        screen.fill((10, 12, 10))
+        t = font_title.render("FIELD MANUAL", True, (180, 180, 180))
+        screen.blit(t, (WIDTH // 2 - t.get_width() // 2, 40))
+
+        guide_lines = [
+            "- MOVEMENT: Use WASD / Arrow Keys to step across tiles.",
+            "- UNEXPLORED TERRAIN: Darker tiles are uncharted ground (NOT walls).",
+            "- REVEALED TILES: Lighter tiles are dug up. Standing near reveals numbers.",
+            "- MINESWEOPER LOGIC: Numbers show adjacent hidden mines.",
+            "- FLAGGING: Right-Click with mouse on unexplored tiles to place flags.",
+            "- VISION RESTRICTION: Numbers only render when close to player.",
+            "- CARCOSA: Your past deaths linger. Spirits stalk your path."
+        ]
+        
+        for i, line in enumerate(guide_lines):
+            surf = font_ui.render(line, True, (170, 170, 150))
+            screen.blit(surf, (50, 120 + i * 40))
+
+        back = font_ui.render("Press SPACE or ESC to return", True, (200, 60, 60))
+        screen.blit(back, (WIDTH // 2 - back.get_width() // 2, 500))
+
+    def draw_dialogue(self, screen):
+        screen.fill((5, 8, 5))
+        pygame.draw.rect(screen, (20, 25, 20), (40, HEIGHT - 180, WIDTH - 80, 140))
+        pygame.draw.rect(screen, (80, 100, 80), (40, HEIGHT - 180, WIDTH - 80, 140), 2)
+
+        speaker, text = INTRO_DIALOGUE[self.dialogue_idx]
+        spk_surf = font_dialogue.render(f"[{speaker}]", True, (220, 80, 80) if speaker == "COMMANDER" else (100, 200, 100))
+        screen.blit(spk_surf, (60, HEIGHT - 165))
+
+        words = text.split(' ')
+        lines = []
+        cur_line = ""
+        for w in words:
+            if len(cur_line + w) > 60:
+                lines.append(cur_line)
+                cur_line = w + " "
+            else:
+                cur_line += w + " "
+        lines.append(cur_line)
+
+        for i, l in enumerate(lines):
+            t_surf = font_ui.render(l, True, (200, 200, 200))
+            screen.blit(t_surf, (60, HEIGHT - 130 + i * 25))
+
+        prompt = font_ui.render("Press SPACE to continue...", True, (120, 120, 120))
+        screen.blit(prompt, (WIDTH - 300, HEIGHT - 65))
+
+    def draw(self, screen):
+        if self.state == "MENU":
+            self.draw_menu(screen)
+            return
+        elif self.state == "GUIDE":
+            self.draw_guide(screen)
+            return
+        elif self.state == "DIALOGUE":
+            self.draw_dialogue(screen)
+            return
+
+        screen.fill(C_BG)
+
+        for y in range(ROWS):
+            for x in range(COLS):
+                tile = self.grid[y][x]
+                rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+                
+                if tile.is_revealed:
+                    if tile.has_blood:
+                        base_col = C_BLOOD
+                    else:
+                        base_col = TERRAIN_COLORS[tile.terrain + '_rev']
+                    pygame.draw.rect(screen, base_col, rect)
+                    pygame.draw.rect(screen, C_REVEALED_BORDER, rect, 1)
+
+                    if tile.is_mine:
+                        pygame.draw.circle(screen, (20, 20, 20), rect.center, TILE_SIZE//3)
+                        pygame.draw.circle(screen, (90, 90, 90), (rect.centerx - 4, rect.centery - 4), 3)
+                    elif tile.adj_mines > 0:
+                        distance = max(abs(x - self.player_x), abs(y - self.player_y))
+                        if distance <= VISION_RADIUS:
+                            number = font_numbers.render(str(tile.adj_mines), True, NUM_COLORS[tile.adj_mines])
+                            screen.blit(number, number.get_rect(center=rect.center))
+                else:
+                    pygame.draw.rect(screen, TERRAIN_COLORS[tile.terrain], rect)
+                    pygame.draw.rect(screen, C_UNREVEALED_BORDER, rect, 1)
+                    if tile.is_flagged:
+                        pygame.draw.polygon(screen, C_FLAG, [
+                            (rect.left + 9, rect.top + 7),
+                            (rect.left + 23, rect.top + 12),
+                            (rect.left + 9, rect.top + 17),
+                        ])
+                        pygame.draw.line(screen, C_FLAG, (rect.left + 9, rect.top + 7), (rect.left + 9, rect.bottom - 5), 2)
+
+        if self.ghost_state in ("OBSERVING", "CHASING"):
+            ghost_rect = pygame.Rect(self.ghost_x * TILE_SIZE, self.ghost_y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            ghost_color = C_GHOST_OBSERVE if self.ghost_state == "OBSERVING" else C_GHOST_CHASE
+            ghost_surface = pygame.Surface(ghost_rect.size, pygame.SRCALPHA)
+            pygame.draw.ellipse(ghost_surface, ghost_color, (6, 3, 20, 26))
+            pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (12, 12), 2)
+            pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (20, 12), 2)
+            screen.blit(ghost_surface, ghost_rect)
+
+        if self.player_x >= 0 and self.player_y >= 0:
+            screen.blit(PLAYER_SPRITE, (self.player_x * TILE_SIZE, self.player_y * TILE_SIZE))
+
+        status = font_ui.render(self.get_phase_message(), True, (190, 180, 150))
+        screen.blit(status, (10, HEIGHT - 24))
+        if self.message and time.time() < self.message_timer:
+            message = font_dialogue.render(self.message, True, (220, 80, 80))
+            screen.blit(message, message.get_rect(center=(WIDTH // 2, 16)))
+
+        if self.state == "GAMEOVER":
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 150))
+            screen.blit(overlay, (0, 0))
+            title = font_title.render("MISSION LOST", True, (220, 60, 60))
+            prompt = font_ui.render("Press R to try again or ESC for menu", True, (220, 220, 220))
+            screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 35)))
+            screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 25)))
+        elif self.state == "VICTORY":
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 130))
+            screen.blit(overlay, (0, 0))
+            title = font_title.render("TREATY DELIVERED", True, (160, 220, 160))
+            prompt = font_ui.render("Press R for another mission or ESC for menu", True, (220, 220, 220))
+            screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 35)))
+            screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 25)))
+
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE and self.state not in ("MENU", "GUIDE"):
+                self.state = "MENU"
+            elif self.state == "MENU":
+                if event.key == pygame.K_SPACE:
+                    self.start_intro()
+                elif event.key == pygame.K_h:
+                    self.state = "GUIDE"
+            elif self.state == "GUIDE":
+                if event.key in (pygame.K_SPACE, pygame.K_ESCAPE):
+                    self.state = "MENU"
+            elif self.state == "DIALOGUE":
+                if event.key == pygame.K_SPACE:
+                    self.dialogue_idx += 1
+                    if self.dialogue_idx >= len(INTRO_DIALOGUE):
+                        self.state = "PLAYING"
+            elif self.state == "PLAYING":
+                directions = {
+                    pygame.K_w: (0, -1), pygame.K_UP: (0, -1),
+                    pygame.K_s: (0, 1), pygame.K_DOWN: (0, 1),
+                    pygame.K_a: (-1, 0), pygame.K_LEFT: (-1, 0),
+                    pygame.K_d: (1, 0), pygame.K_RIGHT: (1, 0),
+                }
+                if event.key in directions:
+                    self.move_player(*directions[event.key])
+            elif self.state in ("GAMEOVER", "VICTORY"):
+                if event.key == pygame.K_r:
+                    self.reset_board()
+                    self.state = "PLAYING"
+                elif event.key == pygame.K_ESCAPE:
+                    self.state = "MENU"
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            self.toggle_flag(*event.pos)
+    def update(self):
+        self.update_carcosa()
+
+
+def main():
+    game = Game()
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            else:
+                game.handle_event(event)
+        game.update()
+        game.draw(screen)
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    pygame.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()
