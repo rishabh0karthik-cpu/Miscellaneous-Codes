@@ -1,8 +1,8 @@
 # Carcosa: Field of Echoes
 
 Carcosa is a horror-themed Minesweeper game built with Pygame. Navigate a
-haunted battlefield, avoid hidden mines, and deliver the treaty before the ghosts in Carcosa
-finds you.
+haunted battlefield, avoid hidden mines, and deliver the treaty before the
+ghost of Carcosa finds you.
 
 ## Status
 
@@ -28,3 +28,9 @@ python Code_1.py
 - `H`: Open the field manual
 - `R`: Restart after victory or defeat
 - `Esc`: Return to the menu
+
+## Objective
+
+Reveal every safe tile without stepping on a mine. Numbers show nearby mines
+within the envoy's vision radius. The ghost becomes more dangerous after each
+death; survive its pursuit to complete the mission.
