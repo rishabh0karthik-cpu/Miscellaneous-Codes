@@ -1,36 +1,64 @@
-# Carcosa: Field of Echoes
+Miscellaneous Codes
 
-Carcosa is a horror-themed Minesweeper game built with Pygame. Navigate a
-haunted battlefield, avoid hidden mines, and deliver the treaty before the
-ghost of Carcosa finds you.
+A collection of small programs, experiments, utilities, and assorted coding projects.
 
-## Status
+This repository is essentially my coding sandbox — things I build while learning, testing ideas, solving problems, or experimenting with different concepts.
 
-Alpha 1. Intended for local and closed-alpha playtesting.
+What's Inside
 
-## Installation
+The repository may contain:
 
-```bash
+- Python programs and experiments
+- Algorithms and problem-solving exercises
+- Data analysis and scientific computing
+- Small automation scripts
+- Machine learning experiments
+- Game or GUI projects
+- Mathematical and computational explorations
+- Other miscellaneous projects
+
+The contents are not necessarily related to one another.
+
+Purpose
+
+This repository is primarily used to:
+
+- Experiment with new ideas
+- Practise programming concepts
+- Build small projects
+- Test libraries and techniques
+- Keep useful or interesting pieces of code in one place
+
+Some projects may be unfinished, experimental, or highly specific to their original purpose.
+
+Structure
+
+Projects are generally kept as separate files or folders depending on their size and complexity.
+
+.
+├── projects/
+├── experiments/
+├── scripts/
+└── ...
+
+The structure may evolve as the repository grows.
+
+Running the Code
+
+Each project may have different requirements.
+
+For Python programs, a typical setup is:
+
+git clone <repository-url>
+cd <repository-folder>
+
 python -m pip install -r requirements.txt
-```
 
-## Launch
+Individual projects may include their own dependencies or instructions.
 
-```bash
-python Code_1.py
-```
+Notes
 
-## Controls
+This repository is a collection of independent work rather than a single packaged application.
+Code quality, documentation, and completeness may vary between projects.
 
-- `Space`: Start the mission or advance dialogue
-- `WASD` or arrow keys: Move
-- Right-click: Flag or unflag a tile
-- `H`: Open the field manual
-- `R`: Restart after victory or defeat
-- `Esc`: Return to the menu
-
-## Objective
-
-Reveal every safe tile without stepping on a mine. Numbers show nearby mines
-within the envoy's vision radius. The ghost becomes more dangerous after each
-death; survive its pursuit to complete the mission.
+Some files exist primarily as experiments or learning exercises.
