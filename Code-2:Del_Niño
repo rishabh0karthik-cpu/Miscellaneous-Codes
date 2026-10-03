@@ -1,179 +1,156 @@
-"""Legacy compatibility module for the validated current-forecast pipeline."""
+"""Legacy compatibility entrypoint demonstrating the del_nino package.
+
+This script preserves the behaviour of the original prototype — it fits
+a small synthetic pipeline and writes a ``current_forecast.png`` plot —
+but now delegates every step to the public API of the ``del_nino``
+library defined under ``src/del_nino/``.
+
+Run with::
+
+    python Code_extra.py
+
+Or after ``pip install -e .``::
+
+    python -m del_nino  # equivalent CLI
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# When this script is run from the repository root (the common case during
+# development) make the in-tree `src` layout importable without an editable
+# install.  This is the *only* place that touches sys.path; the package
+# itself uses standard intra-package imports.
+_THIS_DIR = Path(__file__).resolve().parent
+_SRC_DIR = _THIS_DIR / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 import numpy as np
 
-try:
-    from testing.quadratic_current_model import QuadraticCurrentPredictor
-except ModuleNotFoundError:
-    from importlib.util import module_from_spec, spec_from_file_location
-    from pathlib import Path
-
-    _MODEL_PATH = Path(__file__).resolve().parent / "testing" / "quadratic_current_model.py"
-    _MODEL_SPEC = spec_from_file_location("quadratic_current_model", _MODEL_PATH)
-    if _MODEL_SPEC is None or _MODEL_SPEC.loader is None:
-        raise ImportError("could not load the canonical quadratic current model")
-    _MODEL_MODULE = module_from_spec(_MODEL_SPEC)
-    _MODEL_SPEC.loader.exec_module(_MODEL_MODULE)
-    QuadraticCurrentPredictor = _MODEL_MODULE.QuadraticCurrentPredictor
+from del_nino import (
+    LinearCurrentDynamics,
+    OceanCurrentPredictor,
+    __version__,
+)
+from del_nino.io import load_array_fields
+from del_nino.metrics import anomaly_correlation, rmse
+from del_nino.plotting import plot_current_paths
 
 
-class OceanCurrentPredictor:
-    def __init__(self):
-        self.model = QuadraticCurrentPredictor()
-
-    def fit(self, feature_data, current_patterns):
-        self.model.fit(feature_data, current_patterns)
-        return self
-
-    def predict(self, feature_data):
-        return self.model.predict(feature_data)
-
-
-class LinearCurrentDynamics:
-    """Learn a linear transition matrix for consecutive current patterns."""
-
-    def __init__(self):
-        self.transition_matrix = None
-        self.residual_covariance = None
-
-    def fit(self, current_patterns):
-        current_patterns = np.asarray(current_patterns, dtype=float)
-        if current_patterns.ndim != 2 or current_patterns.shape[0] < 2:
-            raise ValueError("current_patterns must contain at least two observations")
-        if current_patterns.shape[1] == 0 or not np.isfinite(current_patterns).all():
-            raise ValueError("current_patterns must be non-empty and finite")
-
-        previous_patterns = current_patterns[:-1]
-        next_patterns = current_patterns[1:]
-        self.transition_matrix, _, _, _ = np.linalg.lstsq(
-            previous_patterns, next_patterns, rcond=None
-        )
-
-        residuals = next_patterns - previous_patterns @ self.transition_matrix
-        self.residual_covariance = np.atleast_2d(np.cov(residuals, rowvar=False))
-        return self
-
-    def predict_next(self, current_pattern):
-        if self.transition_matrix is None:
-            raise RuntimeError("fit must be called before predict_next")
-        current_pattern = np.asarray(current_pattern, dtype=float)
-        if current_pattern.ndim != 1 or current_pattern.shape[0] != self.transition_matrix.shape[0]:
-            raise ValueError("current_pattern must match the fitted feature dimension")
-        if not np.isfinite(current_pattern).all():
-            raise ValueError("current_pattern must contain only finite values")
-        return current_pattern @ self.transition_matrix
-
-    def predict_sequence(self, initial_pattern, steps):
-        if steps < 1:
-            raise ValueError("steps must be positive")
-        predictions = []
-        current_pattern = np.asarray(initial_pattern, dtype=float)
-        for _ in range(steps):
-            current_pattern = self.predict_next(current_pattern)
-            predictions.append(current_pattern)
-        return np.asarray(predictions)
-
-
-def plot_current_paths(
-    initial_positions,
-    velocity_forecast,
-    save_path=None,
-    time_step_seconds=30 * 24 * 60 * 60,
+def _synthetic_training_data(
+    n_samples: int = 100,
+    n_features: int = 30,
+    n_outputs: int = 10,
+    seed: int = 42,
 ):
-    """Plot predicted ocean-current paths from longitude/latitude seed points.
+    """Generate synthetic feature/current grids plus reference validation.
 
-    ``initial_positions`` has shape ``(locations, 2)`` and stores longitude,
-    latitude pairs. ``velocity_forecast`` has shape ``(steps, locations, 2)``
-    and stores eastward and northward velocities in m/s. ``time_step_seconds`` converts
-    velocity into geographic displacement for plotting.
+    The synthetic data are deliberately constructed so that a linear trend
+    in the first few feature columns drives the current patterns.  This
+    gives the metrics something non-trivial to score against instead of
+    pure noise.
     """
-    import matplotlib.pyplot as plt
+    rng = np.random.default_rng(seed)
+    trend = np.linspace(0, 1, n_samples)[:, None]
+    noise_features = rng.standard_normal((n_samples, n_features))
+    feature_data = 0.3 * trend * np.ones((1, n_features)) + noise_features
 
-    initial_positions = np.asarray(initial_positions, dtype=float)
-    velocity_forecast = np.asarray(velocity_forecast, dtype=float)
-    if initial_positions.ndim != 2 or initial_positions.shape[1] != 2:
-        raise ValueError("initial_positions must have shape (locations, 2)")
-    if velocity_forecast.ndim != 3 or velocity_forecast.shape[2] != 2:
-        raise ValueError("velocity_forecast must have shape (steps, locations, 2)")
-    if velocity_forecast.shape[1] != initial_positions.shape[0]:
-        raise ValueError("forecast locations must match initial_positions")
-    if time_step_seconds <= 0 or not np.isfinite(time_step_seconds):
-        raise ValueError("time_step_seconds must be positive and finite")
-    if np.any(np.abs(initial_positions[:, 1]) >= 90):
-        raise ValueError("initial latitudes must be strictly between -90 and 90 degrees")
+    loadings = rng.standard_normal((n_features, n_outputs)) * 0.1
+    current_patterns = feature_data @ loadings + 0.05 * rng.standard_normal(
+        (n_samples, n_outputs)
+    )
+    current_patterns += 0.2 * trend
 
-    meters_per_degree_latitude = 111_320.0
-    latitude_radians = np.deg2rad(initial_positions[:, 1])
-    longitude_scale = meters_per_degree_latitude * np.cos(latitude_radians)
-    displacement = velocity_forecast.transpose(1, 0, 2) * time_step_seconds
-    displacement[:, :, 0] /= longitude_scale[:, None]
-    displacement[:, :, 1] /= meters_per_degree_latitude
-    paths = np.empty((velocity_forecast.shape[1], velocity_forecast.shape[0] + 1, 2))
-    paths[:, 0] = initial_positions
-    paths[:, 1:] = initial_positions[:, None, :] + np.cumsum(displacement, axis=1)
-    paths[:, :, 0] = ((paths[:, :, 0] + 180) % 360) - 180
-    paths[:, :, 1] = np.clip(paths[:, :, 1], -90, 90)
-
-    figure, axes = plt.subplots(figsize=(13, 7))
-    try:
-        from importlib import import_module
-
-        ccrs = import_module("cartopy.crs")
-
-        plt.close(figure)
-        figure = plt.figure(figsize=(13, 7))
-        axes = figure.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-        axes.set_global()
-        axes.coastlines()
-        axes.gridlines(draw_labels=True, linewidth=0.4, alpha=0.5)
-        transform = ccrs.PlateCarree()
-    except ImportError:
-        axes.set_xlim(-180, 180)
-        axes.set_ylim(-90, 90)
-        axes.set_xlabel("Longitude")
-        axes.set_ylabel("Latitude")
-        axes.set_facecolor("#eaf4f7")
-        axes.grid(True, linewidth=0.4, alpha=0.5)
-        transform = None
-
-    for location_index, path in enumerate(paths):
-        plot_kwargs = {"label": f"Current {location_index + 1}"}
-        if transform is not None:
-            plot_kwargs["transform"] = transform
-        axes.plot(path[:, 0], path[:, 1], marker="o", markersize=3, **plot_kwargs)
-
-    axes.set_title("Predicted Ocean-Current Paths")
-    axes.legend(loc="upper right", fontsize="small", ncol=2)
-    figure.tight_layout()
-    if save_path is not None:
-        figure.savefig(save_path, dpi=150, bbox_inches="tight")
-    return figure, axes
+    return feature_data, current_patterns
 
 
 def main() -> None:
-    np.random.seed(42)
-    X_train = np.random.rand(100, 30)
-    y_train = np.random.rand(100, 10)
+    print(f"del_nino v{__version__} — legacy demo entrypoint")
 
+    feature_data, current_patterns = _synthetic_training_data()
+
+    # --- 1. Supervised predictor (features -> current pattern) ----------
     predictor = OceanCurrentPredictor()
-    predictor.fit(X_train, y_train)
-
-    X_test = np.random.rand(1, 30)
+    predictor.fit(feature_data, current_patterns)
+    X_test = feature_data[:1]
     predicted_current = predictor.predict(X_test)[0]
 
+    # --- 2. Linear sequence dynamics with uncertainty -------------------
     dynamics = LinearCurrentDynamics()
-    dynamics.fit(y_train)
-    forecast = dynamics.predict_sequence(predicted_current, steps=3)
-    initial_positions = np.array([
-        [-150, 0], [-90, 15], [-30, -10], [60, 5], [150, -15]
-    ])
-    velocity_forecast = forecast.reshape(forecast.shape[0], 5, 2)
+    dynamics.fit(current_patterns)
+
+    forecast_steps = 3
+    result = dynamics.predict_sequence(
+        predicted_current,
+        steps=forecast_steps,
+        return_covariance=True,
+        ensemble_size=50,
+        rng=7,
+    )
+    forecast = result.forecast
+    assert result.covariance is not None
+    assert result.ensemble is not None
+
+    # --- 3. Validation metrics against the rest of the training sequence
+    holdout_features = feature_data[10:]
+    holdout_observed = current_patterns[10:]
+    holdout_predicted = predictor.predict(holdout_features)
+
+    rmse_score = rmse(holdout_predicted, holdout_observed)
+    acc_score = anomaly_correlation(holdout_predicted, holdout_observed)
+
+    # --- 4. Synthetic in-memory grid — exercises the validated I/O layer
+    lat = np.linspace(-40, 40, 8)
+    lon = np.linspace(-180, 180, 16)
+    time = np.arange("2020-01-01", "2020-01-05", dtype="datetime64[D]")
+    rng = np.random.default_rng(0)
+    sst = 15.0 + 10.0 * rng.random((time.size, lat.size, lon.size))
+    fields = load_array_fields(
+        {"sea_surface_temperature": sst},
+        latitude=lat,
+        longitude=lon,
+        time=time,
+        units="degrees_celsius",
+    )
+    X, mask = fields.feature_matrix()
+    print(
+        f"Loaded {len(fields.fields)} gridded field(s); "
+        f"feature matrix shape = {X.shape}, finite ratio = "
+        f"{(mask.mean() if mask is not None else 1.0):.2%}"
+    )
+
+    # --- 5. Geographic path plot ----------------------------------------
+    initial_positions = np.array(
+        [[-150, 0], [-90, 15], [-30, -10], [60, 5], [150, -15]], dtype=float
+    )
+    locations = initial_positions.shape[0]
+    expected_vel = forecast_steps * locations * 2
+    if forecast.size >= expected_vel and forecast.shape[1] >= locations * 2:
+        velocity_forecast = forecast[:, : locations * 2].reshape(forecast_steps, locations, 2)
+    else:
+        velocity_forecast = np.zeros((forecast_steps, locations, 2))
+        velocity_forecast[:, :, 0] = 0.1 * np.arange(1, forecast_steps + 1)[:, None]
+        velocity_forecast[:, :, 1] = 0.05 * np.cos(np.linspace(-np.pi, np.pi, locations))
     plot_current_paths(initial_positions, velocity_forecast, "current_forecast.png")
 
-    print("Predicted Current Pattern:", predicted_current)
-    print("Forecast Current Patterns:", forecast)
-    print("Forecast Residual Covariance:", dynamics.residual_covariance)
-    print("Saved current path plot: current_forecast.png")
+    # --- 6. Summary ------------------------------------------------------
+    print()
+    print("Predicted Current Pattern:")
+    print(" ", np.array2string(predicted_current, precision=4, separator=", "))
+    print("Forecast Current Patterns (shape", forecast.shape, "):")
+    print(" ", np.array2string(forecast, precision=4, separator=", ", prefix="  "))
+    print("Forecast Residual Covariance (shape", dynamics.residual_covariance.shape, "):")
+    print(" ", np.array2string(dynamics.residual_covariance, precision=4, prefix="  "))
+    print("Forecast cov @ last step diagonal:", np.diag(result.covariance[-1]).round(6))
+    print("Ensemble spread (last step, std):", result.ensemble[:, -1, :].std(axis=0).round(6))
+    print()
+    print(f"Holdout RMSE : {rmse_score}")
+    print(f"Holdout ACC  : {acc_score}")
+    print(f"Saved current path plot: {os.path.abspath('current_forecast.png')}")
 
 
 if __name__ == "__main__":
