@@ -96,6 +96,7 @@ class Game:
         self.message_timer = 0
         self.dialogue_idx = 0
         self.reset_board()
+        self.jumpscare_timer = 0
 
     def generate_terrain(self):
         for y in range(ROWS):
@@ -132,7 +133,17 @@ class Game:
         elif self.death_count == 1: return "You feel you are being watched..."
         elif self.death_count == 2: return "Carcosa has taken form."
         else: return "IT HUNGERS."
-
+    def get_nearby_mines(self, target_x, target_y, radius=3):
+        mines = []
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                nx, ny = target_x + dx, target_y + dy
+                if 0 <= nx < COLS and 0 <= ny < ROWS:
+                    tile = self.grid[ny][nx]
+                    # We only care about unrevealed mines (flagged or unflagged)
+                    if tile.is_mine and not tile.is_revealed:
+                        mines.append((nx, ny))
+        return mines
     def start_intro(self):
         self.dialogue_idx = 0
         self.state = "DIALOGUE"
@@ -203,21 +214,6 @@ class Game:
             if not tile.is_revealed:
                 tile.is_flagged = not tile.is_flagged
 
-    def trigger_death(self, x, y, caught_by_ghost=False):
-        self.state = "GAMEOVER"
-        self.death_count += 1
-        self.game_over_timer = time.time()
-        self.grid[y][x].has_blood = True
-        
-        if caught_by_ghost:
-            self.set_message("CARCOSA CLAIMED YOU.", 3)
-        else:
-            self.set_message("MISTAKE MADE. SOUL FRACTURED.", 3)
-
-        for row in self.grid:
-            for tile in row:
-                if tile.is_mine:
-                    tile.is_revealed = True
 
     def check_victory(self):
         if self.state != "PLAYING": return
@@ -235,151 +231,107 @@ class Game:
         self.message_timer = time.time() + duration
 
     def update_carcosa(self):
-        if self.state != "PLAYING" or self.first_move: return
+        if self.state != "PLAYING" or self.first_move:
+            return
+
         now = time.time()
 
         if self.death_count == 0:
             if now - self.ghost_timer > 5:
                 self.ghost_timer = now
-                self.ghost_x = random.choice([0, COLS-1])
-                self.ghost_y = random.randint(0, ROWS-1)
+                self.ghost_x, self.ghost_y = random.choice([0, COLS - 1]), random.randint(0, ROWS - 1)
                 self.ghost_state = "OBSERVING"
-            elif now - self.ghost_timer > 1.5 and self.ghost_state == "OBSERVING":
+            elif now - self.ghost_timer > 1.5:
                 self.ghost_state = "HIDDEN"
-
-        elif self.death_count == 1:
+        else:
             if self.ghost_state == "HIDDEN":
                 if now - self.ghost_timer > 3:
                     self.ghost_timer = now
-                    while True:
-                        gx, gy = random.randint(0, COLS-1), random.randint(0, ROWS-1)
-                        if abs(gx - self.player_x) > 5 and abs(gy - self.player_y) > 5:
-                            self.ghost_x, self.ghost_y = gx, gy
-                            self.ghost_state = "CHASING"
-                            break
-            
-            elif self.ghost_state == "CHASING":
-                if now - self.ghost_last_move > 0.8:
-                    self.ghost_last_move = now
-                    if self.ghost_x < self.player_x: self.ghost_x += 1
-                    elif self.ghost_x > self.player_x: self.ghost_x -= 1
-                    
-                    if self.ghost_y < self.player_y: self.ghost_y += 1
-                    elif self.ghost_y > self.player_y: self.ghost_y -= 1
-                
-                if abs(self.ghost_x - self.player_x) <= 3 and abs(self.ghost_y - self.player_y) <= 3:
-                    self.ghost_state = "HIDDEN"
-                    self.ghost_timer = now
-                    self.set_message("It fades into the mist...", 2)
+                    gx, gy = random.randint(0, COLS - 1), random.randint(0, ROWS - 1)
+                    if abs(gx - self.player_x) > 5:
+                        self.ghost_x, self.ghost_y = gx, gy
+                        self.ghost_state = "CHASING" if self.death_count == 1 else "HERDING"
 
-        elif self.death_count >= 2:
-            if self.ghost_state == "HIDDEN":
-                self.ghost_x, self.ghost_y = 0, 0 
-                if self.player_x < COLS//2: self.ghost_x = COLS-1
-                if self.player_y < ROWS//2: self.ghost_y = ROWS-1
-                self.ghost_state = "CHASING"
-            
-            elif self.ghost_state == "CHASING":
-                if now - self.ghost_last_move > self.ghost_step_delay:
-                    self.ghost_last_move = now
-                    if self.ghost_x < self.player_x: self.ghost_x += 1
-                    elif self.ghost_x > self.player_x: self.ghost_x -= 1
-                    else:
-                        if self.ghost_y < self.player_y: self.ghost_y += 1
-                        elif self.ghost_y > self.player_y: self.ghost_y -= 1
-                        
-                    if self.ghost_x == self.player_x and self.ghost_y == self.player_y:
-                        self.trigger_death(self.player_x, self.player_y, caught_by_ghost=True)
+            if self.ghost_state in ("CHASING", "HERDING") and now - self.ghost_last_move > self.ghost_step_delay:
+                self.ghost_last_move = now
+                target_x, target_y = self.player_x, self.player_y
 
-    def draw_menu(self, screen):
-        screen.fill((15, 18, 15))
-        title = font_title.render("CARCOSA", True, (200, 50, 50))
-        subtitle = font_ui.render("Field of Echoes", True, (140, 140, 140))
-        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 80))
-        screen.blit(subtitle, (WIDTH // 2 - subtitle.get_width() // 2, 130))
+                if self.ghost_state == "HERDING":
+                    nearby_mines = self.get_nearby_mines(self.player_x, self.player_y, radius=5)
+                    if nearby_mines:
+                        avg_mx = sum(m[0] for m in nearby_mines) / len(nearby_mines)
+                        avg_my = sum(m[1] for m in nearby_mines) / len(nearby_mines)
+                        push_dir_x = self.player_x - avg_mx
+                        push_dir_y = self.player_y - avg_my
+                        target_x = max(0, min(COLS - 1, int(self.player_x + (push_dir_x * 2))))
+                        target_y = max(0, min(ROWS - 1, int(self.player_y + (push_dir_y * 2))))
 
-        btn_start = font_ui.render("[ SPACE ] Begin Mission", True, (220, 220, 220))
-        btn_guide = font_ui.render("[ H ] Field Manual & Rules", True, (160, 160, 160))
-        screen.blit(btn_start, (WIDTH // 2 - btn_start.get_width() // 2, 400))
-        screen.blit(btn_guide, (WIDTH // 2 - btn_guide.get_width() // 2, 440))
+                if self.ghost_x < target_x:
+                    self.ghost_x += 1
+                elif self.ghost_x > target_x:
+                    self.ghost_x -= 1
+                elif self.ghost_y < target_y:
+                    self.ghost_y += 1
+                elif self.ghost_y > target_y:
+                    self.ghost_y -= 1
 
-    def draw_guide(self, screen):
-        screen.fill((10, 12, 10))
-        t = font_title.render("FIELD MANUAL", True, (180, 180, 180))
-        screen.blit(t, (WIDTH // 2 - t.get_width() // 2, 40))
+                if self.ghost_x == self.player_x and self.ghost_y == self.player_y:
+                    self.trigger_death(self.player_x, self.player_y, caught_by_ghost=True)
 
-        guide_lines = [
-            "- MOVEMENT: Use WASD / Arrow Keys to step across tiles.",
-            "- UNEXPLORED TERRAIN: Darker tiles are uncharted ground (NOT walls).",
-            "- REVEALED TILES: Lighter tiles are dug up. Standing near reveals numbers.",
-            "- MINESWEOPER LOGIC: Numbers show adjacent hidden mines.",
-            "- FLAGGING: Right-Click with mouse on unexplored tiles to place flags.",
-            "- VISION RESTRICTION: Numbers only render when close to player.",
-            "- CARCOSA: Your past deaths linger. Spirits stalk your path."
-        ]
-        
-        for i, line in enumerate(guide_lines):
-            surf = font_ui.render(line, True, (170, 170, 150))
-            screen.blit(surf, (50, 120 + i * 40))
-
-        back = font_ui.render("Press SPACE or ESC to return", True, (200, 60, 60))
-        screen.blit(back, (WIDTH // 2 - back.get_width() // 2, 500))
-
-    def draw_dialogue(self, screen):
-        screen.fill((5, 8, 5))
-        pygame.draw.rect(screen, (20, 25, 20), (40, HEIGHT - 180, WIDTH - 80, 140))
-        pygame.draw.rect(screen, (80, 100, 80), (40, HEIGHT - 180, WIDTH - 80, 140), 2)
-
-        speaker, text = INTRO_DIALOGUE[self.dialogue_idx]
-        spk_surf = font_dialogue.render(f"[{speaker}]", True, (220, 80, 80) if speaker == "COMMANDER" else (100, 200, 100))
-        screen.blit(spk_surf, (60, HEIGHT - 165))
-
-        words = text.split(' ')
-        lines = []
-        cur_line = ""
-        for w in words:
-            if len(cur_line + w) > 60:
-                lines.append(cur_line)
-                cur_line = w + " "
-            else:
-                cur_line += w + " "
-        lines.append(cur_line)
-
-        for i, l in enumerate(lines):
-            t_surf = font_ui.render(l, True, (200, 200, 200))
-            screen.blit(t_surf, (60, HEIGHT - 130 + i * 25))
-
-        prompt = font_ui.render("Press SPACE to continue...", True, (120, 120, 120))
-        screen.blit(prompt, (WIDTH - 300, HEIGHT - 65))
-
-    def draw(self, screen):
-        if self.state == "MENU":
-            self.draw_menu(screen)
-            return
-        elif self.state == "GUIDE":
-            self.draw_guide(screen)
-            return
-        elif self.state == "DIALOGUE":
-            self.draw_dialogue(screen)
+    def trigger_death(self, x, y, caught_by_ghost=False):
+        if self.state != "PLAYING":
             return
 
+        self.death_count += 1
+        self.ghost_state = "HIDDEN"
+        self.ghost_timer = time.time()
+        self.ghost_x = x
+        self.ghost_y = y
+        self.ghost_step_delay = max(0.2, 1.0 - (self.death_count * 0.15))
+        self.grid[y][x].has_blood = True
+        self.set_message("THE TRENCHES REMEMBER...", 2.5 if not caught_by_ghost else 3.0)
+        self.jumpscare_timer = time.time()
+        self.state = "JUMPSCARE"
+
+    def draw_ghost(self, screen):
+        if self.ghost_state == "HIDDEN":
+            return
+
+        ghost_rect = pygame.Rect(
+            self.ghost_x * TILE_SIZE,
+            self.ghost_y * TILE_SIZE,
+            TILE_SIZE,
+            TILE_SIZE,
+        )
+
+        if self.ghost_state == "OBSERVING":
+            ghost_color = C_GHOST_OBSERVE
+        elif self.ghost_state == "HERDING":
+            ghost_color = C_GHOST_ANGRY
+        else:
+            ghost_color = C_GHOST_CHASE
+
+        ghost_surface = pygame.Surface(ghost_rect.size, pygame.SRCALPHA)
+        pygame.draw.ellipse(ghost_surface, ghost_color, (6, 3, 20, 26))
+        pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (12, 12), 2)
+        pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (20, 12), 2)
+        screen.blit(ghost_surface, ghost_rect)
+
+    def draw_world(self, screen):
         screen.fill(C_BG)
 
         for y in range(ROWS):
             for x in range(COLS):
                 tile = self.grid[y][x]
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-                
+
                 if tile.is_revealed:
-                    if tile.has_blood:
-                        base_col = C_BLOOD
-                    else:
-                        base_col = TERRAIN_COLORS[tile.terrain + '_rev']
+                    base_col = C_BLOOD if tile.has_blood else TERRAIN_COLORS[tile.terrain + "_rev"]
                     pygame.draw.rect(screen, base_col, rect)
                     pygame.draw.rect(screen, C_REVEALED_BORDER, rect, 1)
 
                     if tile.is_mine:
-                        pygame.draw.circle(screen, (20, 20, 20), rect.center, TILE_SIZE//3)
+                        pygame.draw.circle(screen, (20, 20, 20), rect.center, TILE_SIZE // 3)
                         pygame.draw.circle(screen, (90, 90, 90), (rect.centerx - 4, rect.centery - 4), 3)
                     elif tile.adj_mines > 0:
                         distance = max(abs(x - self.player_x), abs(y - self.player_y))
@@ -390,27 +342,21 @@ class Game:
                     pygame.draw.rect(screen, TERRAIN_COLORS[tile.terrain], rect)
                     pygame.draw.rect(screen, C_UNREVEALED_BORDER, rect, 1)
                     if tile.is_flagged:
-                        pygame.draw.polygon(screen, C_FLAG, [
-                            (rect.left + 9, rect.top + 7),
-                            (rect.left + 23, rect.top + 12),
-                            (rect.left + 9, rect.top + 17),
-                        ])
-                        pygame.draw.line(screen, C_FLAG, (rect.left + 9, rect.top + 7), (rect.left + 9, rect.bottom - 5), 2)
+                        flag_rect = rect.inflate(-12, -12)
+                        pygame.draw.polygon(
+                            screen,
+                            C_FLAG,
+                            [flag_rect.midtop, flag_rect.bottomright, flag_rect.bottomleft]
+                        )
 
-        if self.ghost_state in ("OBSERVING", "CHASING"):
-            ghost_rect = pygame.Rect(self.ghost_x * TILE_SIZE, self.ghost_y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-            ghost_color = C_GHOST_OBSERVE if self.ghost_state == "OBSERVING" else C_GHOST_CHASE
-            ghost_surface = pygame.Surface(ghost_rect.size, pygame.SRCALPHA)
-            pygame.draw.ellipse(ghost_surface, ghost_color, (6, 3, 20, 26))
-            pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (12, 12), 2)
-            pygame.draw.circle(ghost_surface, (15, 15, 15, 220), (20, 12), 2)
-            screen.blit(ghost_surface, ghost_rect)
+        self.draw_ghost(screen)
 
         if self.player_x >= 0 and self.player_y >= 0:
             screen.blit(PLAYER_SPRITE, (self.player_x * TILE_SIZE, self.player_y * TILE_SIZE))
 
         status = font_ui.render(self.get_phase_message(), True, (190, 180, 150))
         screen.blit(status, (10, HEIGHT - 24))
+
         if self.message and time.time() < self.message_timer:
             message = font_dialogue.render(self.message, True, (220, 80, 80))
             screen.blit(message, message.get_rect(center=(WIDTH // 2, 16)))
@@ -431,6 +377,84 @@ class Game:
             prompt = font_ui.render("Press R for another mission or ESC for menu", True, (220, 220, 220))
             screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 35)))
             screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 25)))
+        elif self.state == "JUMPSCARE":
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((10, 0, 0, 170))
+            screen.blit(overlay, (0, 0))
+            flicker = 200 + int(50 * math.sin(time.time() * 30))
+            title = font_title.render("YOU SAW IT", True, (flicker, 40, 40))
+            screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
+
+    def draw_menu(self, screen):
+        screen.fill((8, 10, 8))
+        title = font_title.render("CARCOSA", True, (220, 200, 160))
+        subtitle = font_ui.render("FIELD OF ECHOES", True, (170, 170, 170))
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80)))
+        screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 35)))
+
+        info = [
+            "Press SPACE to begin the mission",
+            "Press H for field guide",
+            "WASD / Arrows move, Right click to flag",
+        ]
+        for idx, line in enumerate(info):
+            surf = font_ui.render(line, True, (220, 220, 220))
+            screen.blit(surf, surf.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30 + idx * 28)))
+
+    def draw_guide(self, screen):
+        screen.fill((10, 10, 12))
+        title = font_title.render("FIELD GUIDE", True, (220, 210, 160))
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, 80)))
+
+        lines = [
+            "- Reveal every safe tile without stepping on a mine to deliver the treaty.",
+            "- Use WASD or arrow keys to move one tile at a time.",
+            "- Right-click to place or remove a flag.",
+            "- Numbers show nearby mines only within your vision radius.",
+            "- A ghost watches the trenches. If it catches you, press R to retry.",
+            "- Press SPACE or ESC to return to the menu.",
+        ]
+        for idx, line in enumerate(lines):
+            surf = font_ui.render(line, True, (210, 210, 210))
+            screen.blit(surf, (80, 150 + idx * 34))
+
+    def draw_dialogue(self, screen):
+        screen.fill((5, 8, 5))
+        pygame.draw.rect(screen, (20, 25, 20), (40, HEIGHT - 180, WIDTH - 80, 140))
+        pygame.draw.rect(screen, (80, 100, 80), (40, HEIGHT - 180, WIDTH - 80, 140), 2)
+
+        speaker, text = INTRO_DIALOGUE[self.dialogue_idx]
+        spk_surf = font_dialogue.render(f"[{speaker}]", True, (220, 80, 80) if speaker == "COMMANDER" else (100, 200, 100))
+        screen.blit(spk_surf, (60, HEIGHT - 165))
+
+        words = text.split()
+        lines = []
+        current = ""
+        for word in words:
+            if len(current) + len(word) + (1 if current else 0) > 52:
+                lines.append(current)
+                current = word
+            else:
+                current = f"{current} {word}".strip()
+        if current:
+            lines.append(current)
+
+        for idx, line in enumerate(lines[:4]):
+            surf = font_ui.render(line, True, (220, 220, 220))
+            screen.blit(surf, (60, HEIGHT - 130 + idx * 22))
+
+        prompt = font_ui.render("Press SPACE to continue", True, (180, 180, 180))
+        screen.blit(prompt, (WIDTH - 240, HEIGHT - 38))
+
+    def draw(self, screen):
+        if self.state == "MENU":
+            self.draw_menu(screen)
+        elif self.state == "GUIDE":
+            self.draw_guide(screen)
+        elif self.state == "DIALOGUE":
+            self.draw_dialogue(screen)
+        elif self.state in ("PLAYING", "GAMEOVER", "VICTORY", "JUMPSCARE"):
+            self.draw_world(screen)
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -466,7 +490,11 @@ class Game:
                     self.state = "MENU"
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             self.toggle_flag(*event.pos)
+
     def update(self):
+        if self.state == "JUMPSCARE":
+            if time.time() - self.jumpscare_timer > 1.2:
+                self.state = "GAMEOVER"
         self.update_carcosa()
 
 
