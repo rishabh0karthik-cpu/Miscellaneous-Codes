@@ -1,41 +1,20 @@
-"""Legacy compatibility entrypoint demonstrating the del_nino package.
-
-This script preserves the behaviour of the original prototype — it fits
-a small synthetic pipeline and writes a ``current_forecast.png`` plot —
-but now delegates every step to the public API of the ``del_nino``
-library defined under ``src/del_nino/``.
-
-Run with::
-
-    python Code_extra.py
-
-Or after ``pip install -e .``::
-
-    python -m del_nino  # equivalent CLI
-"""
+"""Legacy compatibility demo for the del_nino package."""
 
 from __future__ import annotations
 
-import os
+import argparse
 import sys
 from pathlib import Path
 
-# When this script is run from the repository root (the common case during
-# development) make the in-tree `src` layout importable without an editable
-# install.  This is the *only* place that touches sys.path; the package
-# itself uses standard intra-package imports.
-_THIS_DIR = Path(__file__).resolve().parent
-_SRC_DIR = _THIS_DIR / "src"
-if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
 import numpy as np
 
-from del_nino import (
-    LinearCurrentDynamics,
-    OceanCurrentPredictor,
-    __version__,
-)
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+
+if SRC.is_dir() and str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from del_nino import LinearCurrentDynamics, OceanCurrentPredictor, __version__
 from del_nino.io import load_array_fields
 from del_nino.metrics import anomaly_correlation, rmse
 from del_nino.plotting import plot_current_paths
@@ -46,69 +25,119 @@ def _synthetic_training_data(
     n_features: int = 30,
     n_outputs: int = 10,
     seed: int = 42,
-):
-    """Generate synthetic feature/current grids plus reference validation.
-
-    The synthetic data are deliberately constructed so that a linear trend
-    in the first few feature columns drives the current patterns.  This
-    gives the metrics something non-trivial to score against instead of
-    pure noise.
-    """
+) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    trend = np.linspace(0, 1, n_samples)[:, None]
-    noise_features = rng.standard_normal((n_samples, n_features))
-    feature_data = 0.3 * trend * np.ones((1, n_features)) + noise_features
+    trend = np.linspace(0.0, 1.0, n_samples)[:, None]
 
-    loadings = rng.standard_normal((n_features, n_outputs)) * 0.1
-    current_patterns = feature_data @ loadings + 0.05 * rng.standard_normal(
+    features = 0.3 * trend + rng.standard_normal(
+        (n_samples, n_features)
+    )
+
+    loadings = rng.standard_normal(
+        (n_features, n_outputs)
+    ) * 0.1
+
+    currents = features @ loadings
+    currents += 0.2 * trend
+    currents += 0.05 * rng.standard_normal(
         (n_samples, n_outputs)
     )
-    current_patterns += 0.2 * trend
 
-    return feature_data, current_patterns
+    return features, currents
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the legacy del_nino demonstration."
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("current_forecast.png"),
+        help="Path for the forecast plot.",
+    )
+
+    parser.add_argument(
+        "--forecast-steps",
+        type=int,
+        default=3,
+        help="Number of forecast steps.",
+    )
+
+    parser.add_argument(
+        "--ensemble-size",
+        type=int,
+        default=50,
+        help="Number of ensemble members.",
+    )
+
+    return parser.parse_args()
 
 
 def main() -> None:
+    args = _parse_args()
+
+    if args.forecast_steps < 1:
+        raise ValueError("--forecast-steps must be at least 1.")
+
+    if args.ensemble_size < 1:
+        raise ValueError("--ensemble-size must be at least 1.")
+
     print(f"del_nino v{__version__} — legacy demo entrypoint")
 
-    feature_data, current_patterns = _synthetic_training_data()
+    features, currents = _synthetic_training_data()
 
-    # --- 1. Supervised predictor (features -> current pattern) ----------
     predictor = OceanCurrentPredictor()
-    predictor.fit(feature_data, current_patterns)
-    X_test = feature_data[:1]
-    predicted_current = predictor.predict(X_test)[0]
+    predictor.fit(features, currents)
 
-    # --- 2. Linear sequence dynamics with uncertainty -------------------
+    predicted_current = predictor.predict(features[:1])[0]
+
     dynamics = LinearCurrentDynamics()
-    dynamics.fit(current_patterns)
+    dynamics.fit(currents)
 
-    forecast_steps = 3
     result = dynamics.predict_sequence(
         predicted_current,
-        steps=forecast_steps,
+        steps=args.forecast_steps,
         return_covariance=True,
-        ensemble_size=50,
+        ensemble_size=args.ensemble_size,
         rng=7,
     )
-    forecast = result.forecast
-    assert result.covariance is not None
-    assert result.ensemble is not None
 
-    # --- 3. Validation metrics against the rest of the training sequence
-    holdout_features = feature_data[10:]
-    holdout_observed = current_patterns[10:]
+    forecast = result.forecast
+
+    if result.covariance is None or result.ensemble is None:
+        raise RuntimeError(
+            "Prediction did not return covariance and ensemble data."
+        )
+
+    holdout_features = features[10:]
+    holdout_observed = currents[10:]
     holdout_predicted = predictor.predict(holdout_features)
 
-    rmse_score = rmse(holdout_predicted, holdout_observed)
-    acc_score = anomaly_correlation(holdout_predicted, holdout_observed)
+    rmse_score = rmse(
+        holdout_predicted,
+        holdout_observed,
+    )
+    acc_score = anomaly_correlation(
+        holdout_predicted,
+        holdout_observed,
+    )
 
-    # --- 4. Synthetic in-memory grid — exercises the validated I/O layer
-    lat = np.linspace(-40, 40, 8)
-    lon = np.linspace(-180, 180, 16)
-    time = np.arange("2020-01-01", "2020-01-05", dtype="datetime64[D]")
+    lat = np.linspace(-40.0, 40.0, 8)
+    lon = np.linspace(-180.0, 180.0, 16)
+    time = np.arange(
+        "2020-01-01",
+        "2020-01-05",
+        dtype="datetime64[D]",
+    )
+
     rng = np.random.default_rng(0)
-    sst = 15.0 + 10.0 * rng.random((time.size, lat.size, lon.size))
+
+    sst = 15.0 + 10.0 * rng.random(
+        (time.size, lat.size, lon.size)
+    )
+
     fields = load_array_fields(
         {"sea_surface_temperature": sst},
         latitude=lat,
@@ -116,41 +145,128 @@ def main() -> None:
         time=time,
         units="degrees_celsius",
     )
+
     X, mask = fields.feature_matrix()
+    finite_ratio = mask.mean() if mask is not None else 1.0
+
     print(
         f"Loaded {len(fields.fields)} gridded field(s); "
-        f"feature matrix shape = {X.shape}, finite ratio = "
-        f"{(mask.mean() if mask is not None else 1.0):.2%}"
+        f"feature matrix shape = {X.shape}, "
+        f"finite ratio = {finite_ratio:.2%}"
     )
 
-    # --- 5. Geographic path plot ----------------------------------------
     initial_positions = np.array(
-        [[-150, 0], [-90, 15], [-30, -10], [60, 5], [150, -15]], dtype=float
+        [
+            [-150.0, 0.0],
+            [-90.0, 15.0],
+            [-30.0, -10.0],
+            [60.0, 5.0],
+            [150.0, -15.0],
+        ]
     )
-    locations = initial_positions.shape[0]
-    expected_vel = forecast_steps * locations * 2
-    if forecast.size >= expected_vel and forecast.shape[1] >= locations * 2:
-        velocity_forecast = forecast[:, : locations * 2].reshape(forecast_steps, locations, 2)
-    else:
-        velocity_forecast = np.zeros((forecast_steps, locations, 2))
-        velocity_forecast[:, :, 0] = 0.1 * np.arange(1, forecast_steps + 1)[:, None]
-        velocity_forecast[:, :, 1] = 0.05 * np.cos(np.linspace(-np.pi, np.pi, locations))
-    plot_current_paths(initial_positions, velocity_forecast, "current_forecast.png")
 
-    # --- 6. Summary ------------------------------------------------------
-    print()
-    print("Predicted Current Pattern:")
-    print(" ", np.array2string(predicted_current, precision=4, separator=", "))
-    print("Forecast Current Patterns (shape", forecast.shape, "):")
-    print(" ", np.array2string(forecast, precision=4, separator=", ", prefix="  "))
-    print("Forecast Residual Covariance (shape", dynamics.residual_covariance.shape, "):")
-    print(" ", np.array2string(dynamics.residual_covariance, precision=4, prefix="  "))
-    print("Forecast cov @ last step diagonal:", np.diag(result.covariance[-1]).round(6))
-    print("Ensemble spread (last step, std):", result.ensemble[:, -1, :].std(axis=0).round(6))
-    print()
-    print(f"Holdout RMSE : {rmse_score}")
+    locations = len(initial_positions)
+    components = locations * 2
+
+    if (
+        forecast.ndim == 2
+        and forecast.shape[0] >= args.forecast_steps
+        and forecast.shape[1] >= components
+    ):
+        velocity_forecast = forecast[
+            :args.forecast_steps,
+            :components,
+        ].reshape(
+            args.forecast_steps,
+            locations,
+            2,
+        )
+    else:
+        velocity_forecast = np.zeros(
+            (args.forecast_steps, locations, 2)
+        )
+
+        velocity_forecast[:, :, 0] = (
+            0.1
+            * np.arange(
+                1,
+                args.forecast_steps + 1,
+            )[:, None]
+        )
+
+        velocity_forecast[:, :, 1] = (
+            0.05
+            * np.cos(
+                np.linspace(
+                    -np.pi,
+                    np.pi,
+                    locations,
+                )
+            )
+        )
+
+    args.output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    plot_current_paths(
+        initial_positions,
+        velocity_forecast,
+        args.output,
+    )
+
+    final_covariance = result.covariance[-1]
+    final_ensemble = result.ensemble[:, -1, :]
+    ensemble_std = final_ensemble.std(axis=0)
+
+    print("\nPredicted Current Pattern:")
+    print(
+        np.array2string(
+            predicted_current,
+            precision=4,
+            separator=", ",
+        )
+    )
+
+    print(
+        f"\nForecast Current Patterns "
+        f"(shape {forecast.shape}):"
+    )
+    print(
+        np.array2string(
+            forecast,
+            precision=4,
+            separator=", ",
+        )
+    )
+
+    print(
+        f"\nForecast Residual Covariance "
+        f"(shape {dynamics.residual_covariance.shape}):"
+    )
+    print(
+        np.array2string(
+            dynamics.residual_covariance,
+            precision=4,
+        )
+    )
+
+    print(
+        "\nForecast covariance diagonal:",
+        np.diag(final_covariance).round(6),
+    )
+
+    print(
+        "Ensemble spread at final step:",
+        ensemble_std.round(6),
+    )
+
+    print(f"\nHoldout RMSE : {rmse_score}")
     print(f"Holdout ACC  : {acc_score}")
-    print(f"Saved current path plot: {os.path.abspath('current_forecast.png')}")
+    print(f"Forecast steps: {args.forecast_steps}")
+    print(f"Ensemble size: {args.ensemble_size}")
+    print(f"Saved current path plot: {args.output.resolve()}")
 
 
 if __name__ == "__main__":
